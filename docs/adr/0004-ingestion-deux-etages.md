@@ -19,7 +19,7 @@ archive solide +5,1 %, `xz -9e` +3,7 % — rien de matériel à gagner (`PERF.md
 | | Volume | Verdict |
 |---|---|---|
 | **A** — records complets sur toute l'archive | 164 Go de brut, ~225 Go au total | **ne tient pas** dans 100 Go |
-| **B** — `?turns=false` partout + record complet pour les parties re-simulées | 13,4 + 4 + 17 (re-sim) + 12 (Parquet) + 9 (clone et moteurs) = **~55 Go** | retenu |
+| **B** — `?turns=false` partout + record complet pour les parties re-simulées | 26 + 4 + 17 (re-sim) + 12 (Parquet) + 9 (clone et moteurs) + 2,5 (index) = **~71 Go** | retenu |
 | **C** — records complets limités aux 6 derniers mois | 56 + 17 + 12 + 9 = **~94 Go** | tient, mais **aucune marge** et on perd l'historique 2025 |
 
 ## Choix
@@ -32,7 +32,7 @@ data/raw/meta/<2 premiers caracteres du gameID>/<gameID>.json.zst   # reponse de
 data/raw/full/<2 premiers caracteres du gameID>/<gameID>.json.zst   # reponse complete
 ```
 
-Cible : `meta` pour **tout** le public sauf le ranked 1v1 (**2 654 420 parties, 13,4 Go**), `full` pour les **~100 000 parties
+Cible : `meta` pour **tout** le public sauf le ranked 1v1 (**2 654 420 parties, 21 Go de données, ~26 Go sur disque** — chiffre révisé au J1 sur 55 405 parties réelles ; les 13,4 Go venaient de 27 fixtures biaisées vers les petites parties), `full` pour les **~100 000 parties
 re-simulées** (4 Go), priorisées comme le demande la spec — mes parties, puis les maps
 sous-représentées, puis les plus récentes.
 
@@ -59,7 +59,7 @@ l'option B garde l'archive entière pour l'analyse de population et laisse ~39 G
 
 ## Comment vérifier
 
-- `du -sh data/raw/meta data/raw/full` doit suivre la trajectoire 13,4 Go / 4 Go.
+- `du -sh data/raw/meta data/raw/full` doit suivre la trajectoire 26 Go / 4 Go.
 - Le compteur de requêtes des logs d'ingestion doit montrer **0 requête** pour une partie déjà
   présente dans l'étage demandé (critère d'acceptation du J1).
 - Le ratio `full/meta` doit rester proche du nombre de parties effectivement re-simulées : s'il

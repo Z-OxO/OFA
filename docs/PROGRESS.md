@@ -5,7 +5,7 @@ Spec : [docs/SPEC.md](SPEC.md). Décisions : [docs/adr/](adr/). Perf : [docs/PER
 | Jalon | État | Date |
 | --- | --- | --- |
 | J0 Reconnaissance et mesures | **terminé** | 2026-11-21 |
-| J1 Ingestion | **en cours** — 4 critères sur 5 atteints | 2026-11-21 |
+| J1 Ingestion | **terminé** — les 5 critères atteints | 2026-11-21 |
 | J2 Normalisation | à faire | |
 | J3 Re-simulation | à faire | |
 | J4 Niveau | à faire | |
@@ -112,7 +112,7 @@ de 487 Ko.
   **REDACTED**, et 3 parties de juin 2025 **sans publicID**.
 
 
-## J1 — Ingestion (en cours)
+## J1 — Ingestion (terminé)
 
 ### Code
 
@@ -130,20 +130,43 @@ de 487 Ko.
 
 `uv run pytest -q -m "not slow and not network"` : **28 tests, 3,7 s**. `ruff check .` propre.
 
-### Critères d'acceptation
+### Critères d'acceptation : les 5 atteints
 
-| Critère | État | Preuve |
+| Critère | Preuve |
+| --- | --- |
+| **7 jours des modes ciblés ingérés** | **55 405 parties, 560 Mo.** Re-listage de contrôle des 7 journées (64 requêtes de liste, aucun détail) : **0 partie manquante sur les 6 journées closes** (15 au 20 novembre, `unranked` et `2v2`). Les 178 manquantes sont **toutes sur la journée du jour**, encore ouverte : des parties archivées après le passage du collecteur, ce qui est précisément ce que couvre la règle « ne jamais sceller une journée de moins d'un jour ». |
+| Une relance fait 0 requête pour les parties déjà présentes | Test + vraie exécution : 2ᵉ passage = **2 requêtes** (les 2 pages de liste). Sur la relance à 8 req/s : **17 108 parties sautées**, aucune requête de détail. |
+| `kill -9` en plein milieu puis reprise, ni trou ni doublon | `test_kill_au_milieu_puis_reprise_sans_trou_ni_doublon` (crash ciblé sur une partie nommée, donc déterministe même en parallèle) ; coût exact : la requête en vol est refaite, rien d'autre. Vérifié en vrai : la première exécution a été arrêtée à 42 034 requêtes, la reprise a fini sans trou. |
+| Test de purge sur fixture | `test_purge_de_bout_en_bout_sur_fixture` : le bon joueur et lui seul est expurgé, les 24 autres intacts, l'index l'oublie, la purge est tracée. |
+| Le débit configuré n'est jamais dépassé | `ofa rate-check --rate 8` sur **55 931 requêtes** : avance maximale **+0,059 requête** (seuil 1). Contre-épreuve : la même mesure avec la référence 4 req/s répond **DÉBIT DÉPASSÉ**, donc elle détecte bien le passage à 8. **Aucun 429, aucun 403.** |
+
+### Mesures réelles, qui corrigent le J0
+
+| Mesure | J0 (27 fixtures) | J1 (55 405 parties) |
 | --- | --- | --- |
-| Une relance fait 0 requête pour les parties déjà présentes | **atteint** | test + vraie exécution : 2ᵉ passage = **2 requêtes** (les 2 pages de liste), 32 parties sautées |
-| `kill -9` en plein milieu puis reprise, ni trou ni doublon | **atteint** | `test_kill_au_milieu_puis_reprise_sans_trou_ni_doublon` ; coût exact de la reprise : **1 requête refaite**, celle qui était en vol |
-| Test de purge sur fixture | **atteint** | `test_purge_de_bout_en_bout_sur_fixture` : le bon joueur et lui seul est expurgé, les 24 autres sont intacts |
-| Le débit configuré n'est jamais dépassé | **atteint** | vraie exécution à `OFA_RATE=4` : intervalle minimum **0,2499 s** pour 0,2500 s requis, débit moyen 3,85 req/s, aucun 429/403 |
-| 7 jours des modes ciblés ingérés | **bloqué** | `data/raw/` n'est pas inscriptible depuis ma session (règle `Edit(./data/raw/**)`) |
+| Taille d'un record `meta` | 5,3 Ko (médiane) | **8,3 Ko en moyenne** ; médiane 7,3 ; p90 15,5 ; max 42 |
+| `meta` projeté pour 2 654 420 parties | 13,4 Go | **21 Go de données, ~26 Go sur disque** |
+| Disque total projeté | ~54 Go | **~71 Go sur 100 Go** |
+| Débit effectif | — | 3,56 req/s séquentiel ; **7,01 req/s** à 8 req/s et 4 connexions |
+| Joueurs distincts en 7 jours | — | **298 774** |
+| Index sqlite | — | 2 050 169 lignes pour 55 405 parties → ~2,5 Go à l'échelle de l'archive |
+
+L'estimation du J0 était **36 % trop basse** : les 27 fixtures avaient été choisies pour couvrir des
+cas limites, pas pour représenter la distribution. Toute projection tirée d'un échantillon choisi à
+la main doit être refaite dès qu'on a du volume.
 
 ### Décisions
 
-- **ADR-0006** : 4 req/s pour le rattrapage (7,7 jours pour 2 654 420 parties), 1 req/s en régime
-  permanent. Jamais de recherche de la limite.
+- **ADR-0006** : **8 req/s et 6 connexions** pour le rattrapage (3,8 jours pour 2 654 420 parties),
+  **1 req/s** en régime permanent. Le repère chiffré est le limiteur que les auteurs d'OpenFront
+  s'appliquent à eux-mêmes (`src/server/Master.ts` : 20 req/IP/s) ; 8 en représente 40 %, avec une
+  marge de 2,5×. Ralentissement définitif sur 429 ou 403, **jamais remonté** : remonter pour
+  re-tester serait la sonde que la spec interdit. Jamais de recherche de la limite.
+- Le débit atteignable est **`concurrency / latence`**, pas le débit configuré : mesuré, 4 workers
+  pour 0,57 s de latence ne donnent que 7,01 req/s. Règle : `concurrency >= rate x latence`.
+- `data/raw/` est **en lecture seule depuis la session Claude** (règle `Edit(./data/raw/**)`
+  appliquée par le sandbox). C'est voulu : l'ingestion tourne hors session, en tmux ou sous systemd,
+  comme le prescrit la spec. Les scripts de vérification, eux, ne font que lire.
 - Deux parcours, pas deux modes : `--days N` (récent d'abord, pour l'incrémental et les
   journées récentes) et `--backfill` (`afterId`, du plus ancien au plus récent, pour l'historique).
   Relancer suffit : une journée terminée ou une partie déjà là ne coûte aucune requête.
@@ -151,10 +174,38 @@ de 487 Ko.
   périmètre d'**analyse** (74,7 %) : `publicGameType` étant absent de la liste, `special` ne peut
   pas être filtré avant téléchargement.
 
-### Deux pièges trouvés en route
+### Trois pièges trouvés en route
 
-1. **Un lien symbolique sur `node_modules` corromprait la re-sim en silence** (déjà noté au J0).
-2. **Mesurer un débit par comptage sur fenêtre glissante donne un faux positif** quand l'espacement
-   vaut exactement 1/R : une gigue de 0,1 ms fait apparaître R+1 requêtes en une seconde. Le bon
-   critère est l'intervalle minimum entre deux départs. Trouvé à la première vraie exécution,
-   couvert par un test de non-régression.
+1. **Un lien symbolique sur `node_modules` corromprait la re-sim en silence** : les liens
+   `@openfront/*` sont relatifs et résoudraient vers le mauvais commit. D'où `cp -al`.
+2. **Mesurer un débit est plus subtil qu'il n'y paraît** — trois versions avant la bonne, chacune
+   corrigée par une vraie exécution, et chaque fois c'était la mesure qui avait tort, pas le limiteur :
+   - comptage sur fenêtre glissante fermée : annonce R+1 dès que l'espacement vaut exactement 1/R ;
+   - intervalle minimum : descend sous 1/R à cause de la gigue de l'ordonnanceur (6,6 % des
+     intervalles sur 21 446, le pire à −5 %) ;
+   - **avance sur l'échéancier en fenêtre glissante** : `max((j − R·t_j) − min_{i≤j}(i − R·t_i))`.
+     C'est la bonne. Calculée depuis le seul début du journal, elle est aveugle à une rafale tardive
+     dès que le début a pris du retard : un test le vérifie.
+3. **Les fixtures choisies pour couvrir des cas limites ne représentent pas la distribution** :
+   5,3 Ko sur 27 records, 8,3 Ko sur 55 405.
+
+### Prochaine étape : J2, normalisation sans re-simulation
+
+Tables Parquet `games`, `participants` (stats aplaties en colonnes nommées) et `intents`
+(une ligne par action : tick, joueur, type, cible, paramètres décodés), plus `docs/DATA.md`.
+Matière première déjà sur disque : **55 405 records** dans `data/raw/meta/`.
+
+Points connus à traiter, tous mesurés au J0 et au J1 :
+
+- les stats archivées sont **lacunaires** (`finalTiles` sur 17,7 % des lignes joueur seulement) ;
+- `spawnTile`, `killedBy` et `deathPosition` n'y sont **jamais** ;
+- `turns[]` est **creux** : reprendre la logique de `decompressGameRecord` ;
+- `winner` est un **tuple**, et un membre d'équipe déconnecté peut en manquer ;
+- unions à décoder au runtime : `config.nations`, `config.playerTeams`, `emoji.recipient` ;
+- les tableaux de stats s'allongent avec les versions : toujours tester `len()` ;
+- bigint en chaînes décimales → `int`, jamais `float` ;
+- `"Free For All"` avec les espaces, pas `"FFA"`.
+
+**Premier arbitrage du J2** : les records `meta` ne contiennent **pas** `turns`, donc la table
+`intents` ne pourra être remplie que pour les parties dont on aura le record complet (étage `full`,
+ADR-0004). Il faudra décider si le J2 livre `intents` sur un sous-ensemble, ou s'il attend le J3.

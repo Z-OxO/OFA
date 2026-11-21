@@ -213,8 +213,15 @@ def rate_report(log_path: Path, rate: float) -> dict:
             "max_in_window": len(stamps),
             "mean_rate": None,
         }
-    t0 = stamps[0]
-    max_advance = max(i - rate * (t - t0) for i, t in enumerate(stamps))
+    # Avance maximale sur N'IMPORTE QUELLE fenetre, pas seulement depuis le debut :
+    # max sur j de (j - R*t_j) - min sur i<=j de (i - R*t_i). Calculee depuis t0
+    # seulement, la mesure devient aveugle a une rafale tardive des que le debut du
+    # journal a pris du retard (cas vecu : un journal a 4 req/s suivi d'un segment a 8).
+    max_advance, running_min = 0.0, float("inf")
+    for i, t in enumerate(stamps):
+        v = i - rate * t
+        running_min = min(running_min, v)
+        max_advance = max(max_advance, v - running_min)
     intervals = [b - a for a, b in zip(stamps[:-1], stamps[1:], strict=True)]
     worst, start = 0, 0
     for end in range(len(stamps)):
@@ -226,5 +233,5 @@ def rate_report(log_path: Path, rate: float) -> dict:
         "max_advance": max_advance,
         "min_interval": min(intervals),
         "max_in_window": worst,
-        "mean_rate": (len(stamps) - 1) / (stamps[-1] - t0),
+        "mean_rate": (len(stamps) - 1) / (stamps[-1] - stamps[0]),
     }

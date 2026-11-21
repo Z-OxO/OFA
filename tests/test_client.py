@@ -158,3 +158,17 @@ def test_le_ralentissement_a_un_plancher(cfg, clock):
     for _ in range(10):
         limiter.slow_down()
     assert limiter._interval == pytest.approx(1.0)  # jamais plus lent que 1 req/s
+
+
+def test_rate_report_voit_une_rafale_tardive(tmp_path):
+    """Une rafale apres une longue periode lente doit etre vue.
+
+    Calculee depuis le debut du journal seulement, l'avance serait noyee par le retard
+    accumule et la rafale passerait inapercue.
+    """
+    log = tmp_path / "requests.jsonl"
+    lent = [i * 1.0 for i in range(100)]  # 1 req/s pendant 100 s
+    rafale = [100.0 + i * 0.01 for i in range(20)]  # puis 100 req/s
+    log.write_text("".join(json.dumps({"ts": t}) + "\n" for t in lent + rafale))
+    r = rate_report(log, 4.0)
+    assert r["max_advance"] > 15.0

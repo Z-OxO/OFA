@@ -302,7 +302,7 @@ uniforme parfait** (biais possible à l'intérieur d'une journée) ; c'est un co
 |---|---|
 | Record complet, JSON brut | médiane ~340 Ko ; max observé 1,51 Mo (125 joueurs, 28 574 ticks) |
 | Record complet, **zstd -19** | **médiane 39,2 Ko** (×2,3 à ×9,1 selon la taille) |
-| Record **sans `turns`**, zstd -19 | **médiane 5,3 Ko** → **×6 plus petit**, pour **le même nombre de requêtes** |
+| Record **sans `turns`**, zstd -19 | médiane 5,3 Ko sur 27 fixtures → **estimation 36 % trop basse**, corrigée au J1 : **8,3 Ko en moyenne** sur 55 405 vraies parties (médiane 7,3 ; p90 15,5 ; max 42 Ko) |
 | Latence | 0,41 s pour un record, 1,52 s pour une liste |
 
 ---
@@ -436,12 +436,13 @@ de 60 %) :
 
 | poste | volume |
 |---|---|
-| `data/raw/meta/` — tout le public sauf ranked 1v1, en `?turns=false` | **13,4 Go** |
+| `data/raw/meta/` — tout le public sauf ranked 1v1, en `?turns=false` | **21 Go** de données, **~26 Go sur disque** (55 405 parties réelles = 450 Mo de données pour 560 Mo occupés : surcoût de blocs sur beaucoup de petits fichiers) |
+| `data/state/index.sqlite` — index publicID → parties | **~2,5 Go** (mesuré : 53 Mo pour 55 405 parties) |
 | `data/raw/full/` — records complets des 100 k parties re-simulées | 4,3 Go |
 | Sortie de re-sim, 100 k parties à 179 Ko | 17,1 Go |
 | Parquet normalisés | ~12 Go |
 | Clone OpenFront + moteurs en cache | ~9 Go |
-| **Total** | **~54 Go sur 100 Go** |
+| **Total** | **~71 Go sur 100 Go** (projection révisée au J1 avec les tailles réelles ; 54 Go était calculé sur des fixtures biaisées vers les petites parties) |
 
 **Durée de collecte** : 30,7 jours à 1 req/s, 15,4 jours à 2 req/s, **7,7 jours à 4 req/s** (retenu,
 ADR-0006). `publicGameType` étant absent de la liste, `special` ne peut pas être filtré avant
