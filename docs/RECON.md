@@ -1,58 +1,82 @@
 # RECON — J0, reconnaissance et mesures
 
-**En cours.** Ce document est le livrable du J0. Chaque fait porte un verdict
-**VÉRIFIÉE** (avec le fichier ou la commande qui le prouve) ou **NON VÉRIFIÉE**.
-Les sections encore ouvertes sont listées au § 10.
+Livrable du J0. Chaque fait porte un verdict **VÉRIFIÉE** (avec le fichier ou la commande qui le
+prouve) ou **NON VÉRIFIÉE**. Les commandes sont au § 12 ; chaque requête API est journalisée dans
+`scratch/requests.jsonl` (url, code, durée, octets), ce qui permet de tout recompter.
 
 - Date : 2026-11-21.
 - Clone de référence : `data/openfront/`, **SHA épinglé `1636e2049c3aee43384ac72521a142ef85314aba`**
-  (`main` au 2026-11-20 19:17:57 -0800). Tous les numéros de ligne et extraits ci-dessous
-  renvoient à ce SHA. Le clone fait 2,1 Go (dont 951 Mo de `.git` et 764 Mo de `resources/maps`).
-- Commit de production cité par la spec, `dd85bcfb8b20e599fae15298bf56db1e92947f61` : présent dans
-  le clone, daté 2026-11-18 15:26:00 +0000 (`git log -1 dd85bcf…`).
-- User-Agent utilisé pour les requêtes de reconnaissance :
-  `ofa-recon/0.1 (OpenFront Analyzer; contact: github.com/openfrontio/OpenFrontIO/issues)`.
-  **Provisoire** : à remplacer par l'alias e-mail du projet avant toute collecte.
+  (`main` au 2026-11-20). Tous les extraits renvoient à ce SHA. 2,1 Go (`.git` 951 Mo,
+  `resources/maps` 764 Mo). `git -C data/openfront status` est vide : jamais modifié.
+- User-Agent : `ofa/0.1 (OpenFront Analyzer; contact: <alias du projet>)`. Le contact vient de
+  `.ofa-contact` (hors git) ou de `OFA_CONTACT` ; il n'est jamais écrit dans le code.
+- Débit : 1 requête/s, un seul client, backoff sur 429/403/5xx, pause après 5 erreurs d'affilée.
+  **Aucun 429 ni 403 rencontré** sur 380 requêtes.
+
+---
 
 ## 1. Les faits de « Ce qu'on sait déjà »
 
 | # | Fait de la spec | Verdict | Preuve |
 |---|---|---|---|
-| 1a | `GET /public/games` : fenêtre de 2 jours max | **VÉRIFIÉE, incomplète** | Fenêtre de 4 j → `HTTP 400 {"message":"Time range cannot exceed 2 days"}`. Ne vaut qu'en mode `start`/`end` ; en mode `afterId` il n'y a aucune fenêtre. **La spec omet que `start` et `end` sont obligatoires** (400 sans eux) **et la borne `offset + limit ≤ 10000`** (`docs/API.md`). |
-| 1b | `limit ≤ 1000` | **VÉRIFIÉE** | `limit=1001` → `HTTP 400 "Too big: expected number to be <=1000"`. Défaut = 50. |
-| 1c | Parcours de toute l'archive avec `afterId`, en relisant une marge sous le curseur | **NON VÉRIFIÉE en live** | Documenté mot pour mot dans `docs/API.md` (« A game that finishes archiving late can get an `id` below one you have already passed, so re-read a small margin below your cursor and skip games you have already seen »). La requête `afterId=0` n'a pas encore été exécutée. |
-| 1d | La liste ne donne pas la map | **VÉRIFIÉE** | Clés d'un élément : `id, game, start, end, type, mode, difficulty, numPlayers, maxPlayers, lobbyFillTime, playerTeams, rankedType`. La map n'est que dans `info.config.gameMap` du détail. **Nuance** : `/public/player/:id/games`, lui, renvoie bien un champ `map`. |
-| 1e | Aucune limite de débit documentée | **VÉRIFIÉE** | Rien dans `docs/API.md` ; aucun en-tête `RateLimit-*`, `Retry-After` ni `Cache-Control` observé. **Mais** `server: cloudflare` + `cf-ray` en frontal → un 429/403 peut tomber sans préavis. |
-| 2 | `GameRecordSchema` dans `packages/shared/src/WireSchemas.ts`, avec `gitCommit`, `info.config`, `info.players[]`, `winner`, `duration`, `num_turns`, `statsAgreed`, `turns[]` | **VÉRIFIÉE** | Fichier présent (892 lignes). `GameRecordSchema` = `AnalyticsRecordSchema.extend({ turns })`. Détail au § 3. |
-| 2b | `publicID` null sur les vieilles parties, `"REDACTED"` si compte supprimé | **VÉRIFIÉE (doc) / NON VÉRIFIÉE (observé)** | `docs/API.md` : « It is `null` for some older games. A player who has since deleted their account has `publicID` and `username` set to `"REDACTED"` ». **`publicID` n'existe pas dans le schéma Zod** : c'est un champ ajouté par l'API. Aucun cas `null`/`REDACTED` encore observé sur un vrai record. |
-| 3 | Stats = tableaux indexés par `*_INDEX_*`, bigint sérialisés en chaînes | **VÉRIFIÉE** | `packages/engine-api/src/StatsSchemas.ts` (219 lignes) ; `BigIntStringSchema` accepte `string` `/^-?\d+$/`, `bigint`, et `null → 0n`. Détail au § 6. |
-| 4 | 1 turn = 1 tick = 100 ms | **VÉRIFIÉE** | Sur `data/openfront/records/demoGame1.json` : `num_turns = 1500`, `duration = 150` (secondes) → exactement 0,1 s/tick. |
-| 5 | Le moteur n'est déterministe que sur le build qui a joué la partie | **VÉRIFIÉE, par l'expérience** | `docs/Replays.md` : « the core is only deterministic within one build, so a record only replays on the build that played it ». Constaté : `demoGame1.json` (joué au commit `4444c9c5…`) rejoué au commit `dd85bcf…` donne **21 hash sur 150 identiques, première divergence au tour 210**. |
-| 5b | `createGameRunner(...)` puis `addTurn`/`executeNextTick` ; `WinnerReplayChild.ts` montre le chargement de map | **VÉRIFIÉE, avec correction** | `createGameRunner` est dans `packages/engine/src/GameRunner.ts`, pas dans `WinnerReplay.ts` (qui l'appelle). Signature : `(gameStart, clientID \| undefined, map, callBack, editor = false)`. |
-| 5c | Le commit de prod se récupère avec `git fetch --depth 1 origin <sha>` | **VÉRIFIÉE sous condition** | Ne marche que si le SHA est atteignable depuis une ref de `origin`. Pour `4444c9c5…` (commit du record de démo), GitHub répond `upload-pack: not our ref` → **certains `gitCommit` de records sont irrécupérables**, donc irrejouables. À quantifier sur de vrais records. |
-| 6 | Purger chaque jour les joueurs de `/public/players/recently-deleted` | **VÉRIFIÉE** | Tableau plat `[{publicId, deletedAt}]`, **138 entrées** le 2026-11-21, du 2026-11-14 au 2026-11-21 (fenêtre glissante de 7 j). Paramètre `since` rejeté (400) au-delà de 7 j. `docs/API.md` : « Poll this daily and delete those players from any data you have collected. » |
-| 7 | `api.openfront.io/game/<id>` (sans `/public`) bloque les scripts | **NON VÉRIFIÉE** | Affirmé par `docs/Replays.md` (« Cloudflare blocks scripts »), **mais** `tests/replay/ReplayGame.ts` fait un `fetch` direct sur cette URL. Non testé. Notre chemin reste `/public/game/<id>`, qui répond bien en curl (HTTP 200). |
-| 8 | Le viewer accepte-t-il un tick de départ ? | **VÉRIFIÉE : non** | `src/client/replay/ReplayViewerRoute.ts` (15 lignes) ne parse que `#replay-viewer=<gameID>`, validé par `GAME_ID_REGEX` ; tout le reste du hash est pris comme id et rejeté. Le seek n'existe qu'au runtime. Un record d'un autre build est servi par un hôte versionné `replay.<domain>/<gameID>` (`src/client/VersionedReplay.ts`). |
+| 1a | Fenêtre de 2 jours max | **VÉRIFIÉE, incomplète** | Fenêtre de 4 j → `400 "Time range cannot exceed 2 days"`. Ne vaut qu'en mode `start`/`end`. La spec **omet** que `start` et `end` sont **obligatoires** (400 sans eux) et la borne **`offset + limit ≤ 10000`**. |
+| 1b | `limit ≤ 1000` | **VÉRIFIÉE** | `limit=1001` → `400 "Too big: expected number to be <=1000"`. Défaut = 50. |
+| 1c | Parcours de l'archive par `afterId`, avec marge de relecture | **VÉRIFIÉE** | `afterId=0` → ids 1..5, première partie **2025-06-04**. `Content-Range` **absent** en mode `afterId`, comme documenté. Piège trouvé : `id` est une **chaîne décimale**, à comparer en entier (`"10" < "6"` en lexicographique). Constat cohérent avec l'archivage tardif : une partie du **2025-06-01** porte un id supérieur à une du 2025-06-04. |
+| 1d | La liste ne donne pas la map | **VÉRIFIÉE** | 12 clés : `id, game, start, end, type, mode, difficulty, numPlayers, maxPlayers, lobbyFillTime, playerTeams, rankedType`. La map n'est que dans `info.config.gameMap`. **Nuance** : `/public/player/:id/games` renvoie bien `map`. |
+| 1e | Aucune limite de débit documentée | **VÉRIFIÉE** | Rien dans `docs/API.md` ; aucun en-tête `RateLimit-*`/`Retry-After`. `server: cloudflare` en frontal → un 429/403 reste possible sans préavis, d'où le backoff. |
+| 2 | `GameRecordSchema`, ses champs | **VÉRIFIÉE** | `packages/shared/src/WireSchemas.ts:882`. Détail au § 3. |
+| 2b | `publicID` null sur les vieilles parties, `"REDACTED"` si compte supprimé | **VÉRIFIÉE sur données réelles** | 3 parties du 2025-06 : **publicID null pour 100 % des joueurs** (82/82, 36/36, 37/37). Sur 7 jours récents : **0 % null**, **0,03 % REDACTED** (3 sur 9 799 lignes joueur). `publicID` est **absent du schéma Zod** : c'est un champ ajouté par l'API. |
+| 3 | Stats = tableaux `*_INDEX_*`, bigint en chaînes | **VÉRIFIÉE** | `packages/engine-api/src/StatsSchemas.ts`. Détail au § 6. |
+| 4 | 1 turn = 1 tick = 100 ms | **VÉRIFIÉE, avec un écart constant** | Sur 300 parties : `duration − num_turns × 0,1` vaut **+2,8 s en médiane**, max 13,9 s, soit **< 0,6 % en relatif** (2 parties sur 300 au-delà de 1 %). Donc `tick × 0,1 s` est la bonne conversion ; `duration` inclut quelques secondes de mise en route. Exact au tick près sur le record de démo (1 500 ticks / 150 s). |
+| 5 | Déterminisme seulement sur le build qui a joué la partie | **VÉRIFIÉE, dans les deux sens** | Au **bon** commit : hashs **970/970**, **593/593** et **2934/2934** identiques sur 3 vraies parties. Au **mauvais** commit : divergence dès le tour 210 (21 hashs sur 150). |
+| 5b | `createGameRunner(...)` ; `WinnerReplayChild.ts` pour la map | **VÉRIFIÉE, avec correction** | `createGameRunner` est dans `packages/engine/src/GameRunner.ts`, pas dans `WinnerReplay.ts` (qui l'appelle). Signature : `(gameStart, clientID \| undefined, map, callBack, editor = false)`. |
+| 5c | `git fetch --depth 1 origin <sha>` récupère le commit | **VÉRIFIÉE sous condition** | Ne marche que si le SHA est atteignable depuis une ref d'`origin` : pour le commit du record de démo, GitHub répond `upload-pack: not our ref`. **Mais en pratique le problème ne se pose pas** : sur 300 parties réelles, **3 gitCommit distincts, 3 présents dans le clone → 100 % rejouables**. Idem pour deux commits de juin 2025 (`27343047`, `09a51673`), présents. |
+| 6 | Purger les joueurs de `/public/players/recently-deleted` | **VÉRIFIÉE** | Tableau plat `[{publicId, deletedAt}]`, **138 entrées** le 2026-11-21, fenêtre glissante de 7 jours, `since` rejeté (400) au-delà. |
+| 7 | `api.openfront.io/game/<id>` (sans `/public`) bloque les scripts | **RÉFUTÉE** | Depuis notre script : **HTTP 200, 5 464 o**, charge utile identique. L'affirmation de `docs/Replays.md` ne tient pas aujourd'hui. On reste néanmoins sur `/public/`, qui est le chemin documenté et stable. |
+| 8 | Le viewer accepte-t-il un tick de départ ? | **VÉRIFIÉE : non** | `src/client/replay/ReplayViewerRoute.ts` (15 lignes) ne parse que `#replay-viewer=<gameID>` validé par `GAME_ID_REGEX`. Le seek n'existe qu'au runtime. Un record d'un autre build est servi par un hôte versionné `replay.<domain>/<gameID>` (`src/client/VersionedReplay.ts`). |
 
-## 2. Endpoints publics (inventaire)
+---
 
-Tous documentés dans `data/openfront/docs/API.md` (534 lignes).
+## 2. Découvertes non prévues par la spec
 
-| Endpoint | Intérêt pour ofa | Testé |
-|---|---|---|
-| `GET /public/games` | parcours de l'archive (`afterId`), filtres `type`, `mode`, `rankedType`, `playerTeams` | oui (sauf `afterId`) |
-| `GET /public/game/:id[?turns=false]` | le record complet | oui |
-| `GET /public/players/recently-deleted[?since=]` | purge obligatoire | oui |
-| `GET /public/player/:playerId` | résolution `pseudo.1234` → publicID | non |
-| `GET /public/player/:id/games` | historique perso, **contient `map`** et `result` | non |
-| `GET /public/player/:id/sessions` | **donne le `clientId` par partie → jointure clientID ↔ publicID** | non |
-| `GET /public/leaderboard/ranked?page=1\|2` | elo, peakElo, wins/losses — **top 50 × 2 pages par ladder seulement** | non |
-| `GET /public/clan/...`, `/public/clanmap/history` | hors périmètre | non |
-| `POST /public/identity_token/validate` | hors périmètre (preuve de propriété de compte) | non |
+1. **`Content-Range` donne le total** (`games 0-1/2741`) : compter une journée coûte **1 requête**
+   (`limit=1`), pas un parcours. C'est la base de toutes les mesures de volume du § 7.
+2. **L'API fournit déjà un rating FFA, et le rating d'AVANT la partie.**
+   `/public/player/:id` renvoie `ffaRating = {rating, uncertainty, tier, games, wins, peak}`, et
+   chaque ligne de `/public/player/:id/games` porte
+   `ffaRating = {before, after, expected, deltaResult, deltaPlace}`.
+   C'est exactement la grandeur que la spec demande de calculer au J4. Limites : `null` en partie
+   privée, et **aucun équivalent pour le mode Team**. À arbitrer au J4 — a priori : notre rating
+   chronologique pour la couverture (Team inclus), avec le `before` officiel comme **étalon de
+   validation**, ce qui est un critère d'acceptation bien plus fort que « mieux qu'une référence naïve ».
+3. **`deathPosition` n'est jamais archivé.** Sur **993 lignes joueur / 27 records** étalés de juin 2025
+   à novembre 2026, `deathPosition`, `killedBy` et `spawnTile` sont absents **100 %** du temps ;
+   le moteur les calcule. Donc la mesure de résultat principale de la spec en FFA **n'est accessible
+   que par re-simulation**. Son substitut gratuit `killedAt` (présent sur 62 % des lignes) ne
+   reconstitue le classement qu'imparfaitement : **Spearman −0,81 et −0,96** sur les 2 parties
+   mesurées, relation non monotone. Le **temps de survie** est donc mesurable sur toute la population,
+   le **classement exact** exige la re-sim. *(n = 2 parties, 27 paires : indication, pas mesure ;
+   à refaire au J3.)*
+4. **`deathPosition` compte tous les participants**, bots et nations inclus : jusqu'à **52** dans une
+   partie à 25 humains avec 400 bots. À normaliser avant toute comparaison entre parties.
+5. **Le ranked 1v1 représente 10 % des parties publiques** (mode `"Free For All"`, 2 joueurs). La spec
+   l'exclut : il faut donc filtrer `rankedType != "1v1"`, sinon 1 partie sur 10 est hors périmètre.
+6. **`rankedType=ffa` ne renvoie aucune partie** sur les 7 derniers jours, alors que le ladder FFA
+   existe dans `/public/leaderboard/ranked`. Le périmètre « ranked ffa » de la spec est donc vide
+   aujourd'hui — à revérifier avant de coder un cas particulier.
+7. **`publicGameType: "special"`** (9,7 % de l'échantillon) et **`playerTeams: "Humans Vs Nations"`**
+   (8,0 %) sont des parties publiques d'un genre à part (ex. Team HvN avec 100 bots). La spec ne dit
+   pas si elles entrent dans le périmètre : **question ouverte**, elles sont pour l'instant incluses
+   dans les comptages « Team ».
+8. **`persistentID` est exposé comme clé mais vaut `null`** sur l'API publique (57/57 joueurs testés) :
+   l'interdiction de le stocker est déjà satisfaite par la source.
+9. **`access-control-allow-origin: https://openfront.io`** : usage serveur-à-serveur uniquement, le
+   site ne pourra jamais appeler l'API depuis le navigateur.
+10. Endpoints utiles non cités par la spec : `/public/player/:id/games` (**contient `map`** et
+    `result`), `/public/player/:id/sessions` (**`clientId` par partie → jointure clientID ↔ publicID**),
+    `/public/leaderboard/ranked` (elo, mais **top 50 × 2 pages par ladder** seulement).
 
-`access-control-allow-origin: https://openfront.io` → usage serveur-à-serveur uniquement.
-`persistentID` est exposé comme clé mais vaut `null` sur 57/57 joueurs du record testé : l'interdiction
-de stocker `persistentID` est déjà satisfaite par la source.
+---
 
 ## 3. Structure du record
 
@@ -60,26 +84,30 @@ de stocker `persistentID` est déjà satisfaite par la source.
 
 ```
 GameRecord
-├─ version    : literal "v0.0.2"   — JAMAIS incrémenté malgré les changements de schéma : ne pas s'en servir
-├─ gitCommit  : 40 hex | "DEV"     — requis ; clé du re-jeu déterministe
+├─ version    : literal "v0.0.2"   — JAMAIS incrémenté malgré les changements de schéma
+├─ gitCommit  : 40 hex | "DEV"     — clé du re-jeu déterministe
 ├─ subdomain? / domain? / site?
-├─ turns[]    : { turnNumber, intents[], hash? }  — TABLEAU CREUX (§ 9)
+├─ turns[]    : { turnNumber, intents[], hash? }   — TABLEAU CREUX (§ 9)
 └─ info
    ├─ gameID, lobbyCreatedAt, visibleAt?, listed?
-   ├─ config   : voir ci-dessous
-   ├─ players[]: clientID, username, clanTag(nullable), cosmetics?, isLobbyCreator?,
-   │             friends?, teamIndex?, persistentID(nullable), stats?, team?
-   │             + publicID (ajouté par l'API, hors schéma Zod)
+   ├─ config    (§ ci-dessous)
+   ├─ players[] : clientID, username, clanTag(nullable), cosmetics?, isLobbyCreator?,
+   │              friends?, teamIndex?, persistentID(nullable), stats?, team?
+   │              + publicID (ajouté par l'API, hors schéma Zod)
    ├─ tribes?, scenario?
    ├─ start / end (ms epoch), duration (SECONDES), num_turns (ticks joués)
-   ├─ winner?  : tuple, voir ci-dessous
+   ├─ winner?   : tuple (ci-dessous)
    ├─ lobbyFillTime (MILLISECONDES)
    ├─ publicGameType? : "ffa" | "team" | "special" | "hosted"
    ├─ reports?        : scrubé par l'API
-   └─ statsAgreed?    : seul `true` vaut accord ; `false` et absent = non vérifié
+   └─ statsAgreed?    : seul `true` vaut accord
 ```
 
-`winner` (`packages/engine-api/src/Schemas.ts`, `WinnerSchema`) est un **tuple hétérogène**, pas un objet :
+Sur les records de **juin 2025**, `info` est réduit à `config, duration, end, gameID, num_turns,
+players, start, winner` : ni `lobbyCreatedAt`, ni `lobbyFillTime`, ni `publicGameType`, ni
+`statsAgreed`, ni `tribes` (vérifié sur 3 records).
+
+`winner` (`packages/engine-api/src/Schemas.ts`, `WinnerSchema`) est un **tuple**, pas un objet :
 
 ```ts
 z.union([
@@ -89,26 +117,27 @@ z.union([
 ]).optional()
 ```
 
-- FFA humain → `["player", clientID]` ; FFA gagné par une nation → `["nation", nom]` ;
-- Équipe → `["team", nomEquipe, ...clientIDs éligibles]`. Un membre déconnecté **peut manquer** du
-  tuple (`GameImpl.ts`, `isEligibleForTeamWin`) → pour « qui a gagné » en Team, croiser `winner[1]`
-  avec `players[].team`, ne pas se fier à `winner[2:]`.
-- Absent = pas de gagnant (ranked annulé ; `result = incomplete` côté API).
+Observé : `["player","jD44hEhv"]` en FFA, et
+`["team","Red","KQCJ8nAn","f1bKupsc","rtV1iDme","UciRvx2w","qfP8Jc6Z","ZcaL8h96"]` en Team.
+Un membre déconnecté **peut manquer** du tuple (`GameImpl.isEligibleForTeamWin`) → pour « qui a
+gagné » en Team, croiser `winner[1]` avec `players[].team`, pas `winner[2:]`.
 
-`info.config` (`GameConfigSchema`) — requis : `gameMap`, `difficulty` (`Easy|Medium|Hard|Impossible`),
-`gameType` (`Singleplayer|Public|Private`), `gameMode` (**`"Free For All"` | `"Team"`**, avec les
-espaces), `gameMapSize` (`Compact|Normal`), `nations` (uint 1..400 **ou** `"default"|"disabled"`),
-`bots` (≤ 1000), `donateGold`, `donateTroops`, `infiniteGold`, `infiniteTroops`, `instantBuild`,
-`randomSpawn`. Optionnels utiles : `rankedType?` (`1v1|2v2|ffa|clanwars`), `playerTeams?`
-(uint **ou** `"Duos"|"Trios"|"Quads"|"Humans Vs Nations"`), `maxPlayers?`, `publicGameModifiers?`
+`info.config` — requis : `gameMap`, `difficulty` (`Easy|Medium|Hard|Impossible`), `gameType`
+(`Singleplayer|Public|Private`), `gameMode` (**`"Free For All"` | `"Team"`**, avec les espaces),
+`gameMapSize` (`Compact|Normal`), `nations` (uint 1..400 **ou** `"default"|"disabled"`), `bots`
+(≤ 1000), `donateGold`, `donateTroops`, `infiniteGold`, `infiniteTroops`, `instantBuild`,
+`randomSpawn`. Optionnels utiles : `rankedType?` (`1v1|2v2|ffa|clanwars`), `playerTeams?` (uint
+**ou** `"Duos"|"Trios"|"Quads"|"Humans Vs Nations"`), `maxPlayers?`, `publicGameModifiers?`
 (13 flags), `disabledUnits?`, `winThresholdTenths?`, `customAllianceDuration?`, `doomsdayClock?`,
 `overtime?`.
 
+---
+
 ## 4. Inventaire des intents (25)
 
-Union discriminée sur `type` : `IntentSchema`, `packages/engine-api/src/Schemas.ts`.
-Dans un record, chaque intent porte en plus `clientID` (stamp serveur) = l'auteur.
-`clientID` peut valoir `"ADMINBOT"` (`ADMIN_BOT_CLIENT_ID`), qui n'est **pas** un joueur de `info.players`.
+Union discriminée sur `type` : `IntentSchema`, `packages/engine-api/src/Schemas.ts` (recompté à la
+main au SHA épinglé). Dans un record, chaque intent porte en plus `clientID` (stamp serveur) ;
+`clientID` peut valoir `"ADMINBOT"`, qui n'est pas un joueur de `info.players`.
 
 | `type` | champs | ce que ça encode |
 |---|---|---|
@@ -128,7 +157,7 @@ Dans un record, chaque intent porte en plus `clientID` (stamp serveur) = l'auteu
 | `build_unit` | `unit` (UnitType), `tile`, `rocketDirectionUp?`, `amount?` | construction |
 | `upgrade_structure` | `unit`, `unitId`, `amount?` | amélioration d'une structure |
 | `delete_unit` | `unitId` | suppression / vente d'unité |
-| `move_warship` | `unitIds[]`, `tile` | déplacement de navires de guerre |
+| `move_warship` | `unitIds[]`, `tile` | déplacement de navires |
 | `embargo` | `targetID`, `action` (`start`\|`stop`) | embargo ciblé |
 | `embargo_all` | `action` | embargo général |
 | `quick_chat` | `recipient`, `quickChatKey`, `target?` | chat rapide |
@@ -138,31 +167,32 @@ Dans un record, chaque intent porte en plus `clientID` (stamp serveur) = l'auteu
 | `update_game_config` | `config` (patch partiel) | le host change la config du lobby |
 | `toggle_game_start_timer` | — | bascule le timer de départ |
 
-`UnitType` (`GameTypes.ts`) : `Transport, Warship, Shell, SAMMissile, Port, Atom Bomb, Hydrogen Bomb,
-Trade Ship, Missile Silo, Defense Post, SAM Launcher, City, MIRV, MIRV Warhead, Train, Factory`
+`UnitType` : `Transport, Warship, Shell, SAMMissile, Port, Atom Bomb, Hydrogen Bomb, Trade Ship,
+Missile Silo, Defense Post, SAM Launcher, City, MIRV, MIRV Warhead, Train, Factory`
 (attention aux espaces dans les valeurs).
+
+---
 
 ## 5. Inventaire des `GameUpdateType` (24) et état par joueur
 
-`packages/engine-api/src/game/GameUpdates.ts`. **Enum numérique implicite** : l'index est l'ordre de
-déclaration, donc on stocke les **noms**, jamais les index (une réorganisation rendrait les données illisibles).
+`packages/engine-api/src/game/GameUpdates.ts`, **enum numérique implicite** : l'index est l'ordre de
+déclaration, donc on stocke les **noms**, jamais les index. Ordre exact (0 → 23), relu à la main :
 
-Ordre exact (0 → 23) : `Tile, Unit, Player, DisplayEvent, DisplayChatEvent, AllianceRequest,
-AllianceRequestReply, BrokeAlliance, AllianceExpired, AllianceExtension, TargetPlayer, Emoji, Win,
-Hash, UnitIncoming, BonusEvent, RailroadDestructionEvent, RailroadConstructionEvent,
-RailroadSnapEvent, ConquestEvent, EmbargoEvent, SpawnPhaseEnd, GamePaused, DonateEvent`.
+`Tile, Unit, Player, DisplayEvent, DisplayChatEvent, AllianceRequest, AllianceRequestReply,
+BrokeAlliance, AllianceExpired, AllianceExtension, TargetPlayer, Emoji, Win, Hash, UnitIncoming,
+BonusEvent, RailroadDestructionEvent, RailroadConstructionEvent, RailroadSnapEvent, ConquestEvent,
+EmbargoEvent, SpawnPhaseEnd, GamePaused, DonateEvent`
 
-Les événements demandés par le J3 s'y trouvent : conquêtes (`ConquestEvent{conquerorId, conqueredId, gold}`),
+Les événements demandés au J3 y sont : conquêtes (`ConquestEvent{conquerorId, conqueredId, gold}`),
 alliances (`AllianceRequest`, `AllianceRequestReply`, `BrokeAlliance{traitorID, betrayedID}`,
-`AllianceExpired`, `AllianceExtension`), dons (`DonateEvent{donationType, senderId, recipientId, amount}`),
-embargos (`EmbargoEvent`), fin de phase de spawn (`SpawnPhaseEnd`), victoire (`Win{winner, allPlayersStats}`),
-hash de vérification (`Hash{tick, hash}`). Les constructions/destructions passent par `Unit` —
-**vidé du tableau** par `GameRunner.sendUpdates`, donc à lire dans `packedUnitUpdates`.
+`AllianceExpired`, `AllianceExtension`), dons (`DonateEvent{donationType, senderId, recipientId,
+amount}`), embargos (`EmbargoEvent`), fin de phase de spawn (`SpawnPhaseEnd`), victoire
+(`Win{winner, allPlayersStats}`), hash (`Hash{tick, hash}`). Les constructions/destructions passent
+par `Unit`, **vidé du tableau** par `GameRunner.sendUpdates` → à lire dans `packedUnitUpdates`.
 Les éliminations se lisent sur `PlayerUpdate` (`isAlive`, `killedBy`, `deathPosition`).
 
-**Données par joueur pendant la simulation.** Le runner Node expose `runner.game`, donc on lit
-directement `Player` du moteur (`packages/engine/src/game/Game.ts`) et **jamais `PlayerView`** (couche
-client qui reconstruit l'état depuis les diffs) :
+**État par joueur pendant la simulation.** Le runner Node expose `runner.game`, donc on lit
+directement `Player` (`packages/engine/src/game/Game.ts`) et **jamais `PlayerView`** :
 
 - territoire : `numTilesOwned()`, `tiles()`, `borderTiles()` ;
 - économie : `gold()`, `goldEarned()`, `tradeGold()`, `trainGold()`, `piracyGold()`, `troops()` ;
@@ -173,14 +203,17 @@ client qui reconstruit l'état depuis les diffs) :
 - cibles / embargos : `targets()`, `transitiveTargets()`, `getEmbargoes()`, `tradingPartners()` ;
 - état : `isAlive()`, `isTraitor()`, `isDisconnected()`, `inDoomsdayClock()`, `hasSpawned()`, `spawnTile()`.
 
-Côté `Game` : `ticks()`, `players()`, `allPlayers()`, `playerBySmallID()`, `inSpawnPhase()`, `stats().stats()`.
+Côté `Game` : `ticks()`, `players()`, `allPlayers()`, `playerBySmallID()`, `inSpawnPhase()`,
+`stats().stats()`.
+
+---
 
 ## 6. Décodage des stats
 
-`packages/engine-api/src/StatsSchemas.ts`. Tous les champs sont optionnels, et `stats` lui-même peut
-être `undefined` ou `{}`.
+`packages/engine-api/src/StatsSchemas.ts`. Tous les champs sont optionnels, et `stats` peut être
+`undefined` ou `{}`.
 
-| champ | indexé par | dimension | index |
+| champ | indexé par | dim. | index |
 |---|---|---|---|
 | `attacks` | `ATTACK_INDEX_*` | 4 | SENT=0, RECV=1, CANCEL=2, MAX_RECV=3 |
 | `tiles` | `TILE_INDEX_*` | 3 | PEAK=0, DRAWDOWN_PEAK=1, DRAWDOWN_TROUGH=2 |
@@ -192,104 +225,220 @@ Côté `Game` : `ticks()`, `players()`, `allPlayers()`, `playerBySmallID()`, `in
 | `gold` | `GOLD_INDEX_*` | 7 | WORK=0, WAR=1, TRADE=2, STEAL=3, TRAIN_SELF=4, TRAIN_OTHER=5, DONATE_RECV=6 *(ajouté après)* |
 | `donations` | `DONATION_INDEX_*` | 2 | GOLD_RECV=0, GOLD_RECV_BROKE=1 |
 
-Scalaires : `betrayals`, `killedAt`, `peakTroops`, `finalTiles`, `killedBy` (clientID ou `null`),
-`deathPosition`, `spawnTile`, `kills: [{victim, tick}]`.
+Scalaires : `betrayals`, `killedAt`, `peakTroops`, `finalTiles`, `killedBy`, `deathPosition`,
+`spawnTile`, `kills: [{victim, tick}]`.
 
 Valeurs = **bigint sérialisés en chaînes décimales** (`"12345"`), parfois `null` qui vaut **`0`**.
 En Python : `int(v) if v is not None else 0`, **jamais `float`**.
-Les stats recalculées par le moteur sont indexées par **`clientID`**
-(`src/server/GameServer.ts:2191` : `winner?.allPlayersStats[player.clientID]`), ce qui rend le diff
-avec `info.players[i].stats` direct.
+Les stats recalculées sont indexées par **`clientID`** (`src/server/GameServer.ts:2191`).
 
-## 7. Re-simulation : ce qui existe et ce qu'on mesure
+**Taux de présence réel** (993 lignes joueur, 27 records) — les stats archivées sont **lacunaires**,
+il faudra l'expliquer au J2 :
 
-`tests/replay/ReplayGame.ts` (280 lignes, script npm `replay:game`) **est déjà** un harnais headless :
-il télécharge un record, le parse avec `GameRecordSchema.safeParse` (tolérant aux vieux records),
-le décompresse (`decompressGameRecord`), charge la map via `NodeGameMapLoader` + `loadMapFiles` +
-`loadTerrainMap`, construit le jeu (`createGame`, `createNationsForGame`) et boucle
-`addTurn` / `executeNextTick` en comparant les hashs. → **on l'adapte, on ne le réécrit pas** (ADR-0002).
+| champ | présent | champ | présent |
+|---|---|---|---|
+| `gold` | 94,4 % | `killedAt` | 62,0 % |
+| `attacks` | 93,8 % | `kills` | 25,7 % |
+| `units` | 82,8 % | `bombs` | 20,4 % |
+| `tiles` / `alliances` / `peakTroops` | 79,8 % | `betrayals` | 19,7 % |
+| `boats` | 77,2 % | `finalTiles` | 17,7 % |
+| `conquests` | 73,1 % | `donations` | 1,0 % |
+| `spawnTile` / `killedBy` / `deathPosition` | **0 %** | | |
 
-Trois adaptations seulement, dans `scratch/resim_poc/ofa_runner.ts` :
-maps lues depuis `$OFA_MAPS_DIR`, capture de l'update `Win`, sortie JSON avec bigint en chaînes.
-L'URL `/public/` s'obtient sans toucher au code : `--api-base https://api.openfront.io/public`.
+---
 
-**Aucun bundle n'est nécessaire** : les packages exportent le TS brut
-(`packages/*/package.json` → `"exports": { "./*": "./src/*.ts" }`) et tout tourne sous `tsx`.
-Mesures et chiffres : `docs/PERF.md`.
+## 7. Volumes et distribution
 
-## 8. Mesures
+### 7.1 Volume par mode (1 requête par jour et par mode, via `Content-Range`)
 
-Mesures locales (toutes reproductibles, commandes au § 11) :
+7 jours, du 2026-11-14 au 2026-11-20 :
 
-| Mesure | Valeur |
+| mode | somme 7 j | moyenne/jour |
+|---|---|---|
+| Public FFA | 46 334 | **6 619** |
+| Public Team | 18 903 | **2 700** |
+| Public ranked 2v2 | 1 202 | 172 |
+| Public ranked ffa | **0** | 0 |
+| **Tout public** | **65 237** | **9 320** |
+
+Périmètre ofa (hors ranked 1v1, soit 10 % de l'échantillon) : **8 388 parties/jour**.
+Archive disponible depuis le **2025-06-04**, soit **535 jours**.
+
+### 7.2 Distribution (échantillon de 300 parties, graine fixe 20261121)
+
+Tirage : pages à offset aléatoire, pondérées par le volume du jour. **Ce n'est pas un tirage
+uniforme parfait** (biais possible à l'intérieur d'une journée) ; c'est un compromis assumé pour
+éviter 65 000 requêtes de détail.
+
+- mode : FFA 68,7 %, Team 31,3 %.
+- `publicGameType` : ffa 55,7 %, team 23,3 %, **special 9,7 %**, absent 11,3 %.
+- `rankedType` : aucun 88,7 %, **1v1 10,0 %**, 2v2 1,3 %.
+- `playerTeams` : aucun 68,7 %, puis `2` (8,3 %), **`Humans Vs Nations` (8,0 %)**, `4`, `3`, `7`, `6`,
+  `Quads`, `5`, `Duos`, `Trios`.
+- difficulté des nations : **Medium 92,0 %**, Hard 8,0 % (ni Easy ni Impossible observés).
+- taille de map : Normal 70,3 %, Compact 29,7 %.
+- joueurs humains : 17-32 → 32,0 %, 49+ → 24,3 %, 1-8 → 20,7 %, 9-16 → 12,3 %, 33-48 → 10,7 %
+  (moyenne 32,7).
+- **103 maps distinctes sur 300 parties** : World 7,7 %, Australia 6,3 %, puis Four Islands, Europe
+  et Asia à 3,7 %. **Longue traîne : 83 maps se partagent 49 %.** L'objectif « au moins 40 maps
+  analysées séparément » demandera donc un gros volume : la 20ᵉ map ne pèse que ~1,3 %, soit
+  ~110 parties/jour.
+- `statsAgreed` : **true 99,0 %**, false 1,0 %.
+- `gitCommit` : **3 distincts sur 300 parties**, les 3 présents dans le clone.
+- `num_turns` : médiane 8 066, p90 17 761, max 29 342. `duration` : médiane 810 s, p90 1 779 s.
+
+### 7.3 Tailles mesurées
+
+| mesure | valeur |
 |---|---|
-| Clone OpenFront complet | 2,1 Go (`.git` 951 Mo, `resources/maps` 764 Mo) |
-| Nombre de maps | **148**, 5 fichiers chacune (`manifest.json`, `map.bin`, `map4x.bin`, `map16x.bin`, `thumbnail.webp`) |
-| Worktree sans `resources/maps` (sparse) | 393 Mo |
-| `npm ci --ignore-scripts` | **15,4 s**, `node_modules` **362 Mo**, pic RSS 704 Mo |
-| Une map matérialisée (pangaea) | 1,3 Mo (map.bin 977 Ko + map4x 244 Ko + map16x 61 Ko + manifest 2,9 Ko) |
-| Re-sim de 1 500 ticks (1 joueur, Pangaea) | **3,4 s** de simulation, 4,84 s de mur, pic RSS **243 Mo** |
-| Surcoût de démarrage node + tsx | ≈ **1,4 s** par processus |
-| Commits OpenFront : 7 j / 30 j / 90 j / 365 j | 57 / 272 / 852 / 2 611 |
-| …dont touchant `package-lock.json` | 1 / 4 / 14 / **82** |
-| …dont touchant `resources/maps` | 3 / 27 / 62 / **223** |
+| Record complet, JSON brut | médiane ~340 Ko ; max observé 1,51 Mo (125 joueurs, 28 574 ticks) |
+| Record complet, **zstd -19** | **médiane 39,2 Ko** (×2,3 à ×9,1 selon la taille) |
+| Record **sans `turns`**, zstd -19 | **médiane 5,3 Ko** → **×6 plus petit**, pour **le même nombre de requêtes** |
+| Latence | 0,41 s pour un record, 1,52 s pour une liste |
 
-Mesures API (12 requêtes réelles, 1 req/s, **pas encore loggées en JSONL** — à refaire à l'étape suivante) :
+---
 
-| Mesure | Valeur |
-|---|---|
-| `GET /public/games?…&limit=5` | HTTP 200, **1,52 s**, 1 322 o |
-| `GET /public/game/<id>` (57 joueurs, 12 239 turns) | HTTP 200, **0,41 s**, **804 156 o** |
-| idem `?turns=false` | **48 314 o** (**×16,6 plus petit**) |
-| `/public/players/recently-deleted` | 138 entrées sur 7 jours |
-| Parties **publiques Team** le 2026-11-18 (1 jour) | **2 741** (`Content-Range: games 0-1/2741`) |
+## 8. Re-simulation : le POC (critère d'acceptation)
 
-`Content-Range` donne le total : **compter une journée coûte 1 requête** (`limit=1`), pas un parcours.
-C'est la base de la projection de volume du § 10.
+3 vraies parties `statsAgreed: true`, rejouées **au commit exact du record** :
+
+| gameID | map | mode | joueurs | ticks | hashs | débit | diff |
+|---|---|---|---|---|---|---|---|
+| `cPaLHdRvC2` | Gateway to the Atlantic | FFA | 25 | 9 701 | **970/970** | 159 t/s | **VIDE** |
+| `dtQhXS8owK` | Strait of Hormuz | Team | 24 | 5 931 | **593/593** | 253 t/s | **VIDE** |
+| `cDkWi2N1AT` | Great Lakes | FFA | **95** | **29 342** | **2934/2934** | 172 t/s | **VIDE** |
+
+« Diff vide » signifie : **gagnant identique** (y compris le tuple Team à 6 membres) et **toutes les
+stats archivées de tous les joueurs identiques**, après conversion des bigint en entiers. **Zéro
+divergence de valeur.**
+
+Deux écarts ont été écartés, chacun justifié par une mesure :
+
+1. `spawnTile`, `killedBy`, `deathPosition` : calculés par le moteur, **jamais archivés**
+   (0 sur 993 lignes joueur). Leur absence du record n'est pas une divergence de simulation.
+2. 5 joueurs de la grosse partie n'ont **de stats ni dans le record ni dans la re-sim** (jamais
+   spawné) : c'est un accord. Mon premier comparateur les comptait à tort comme écarts ; corrigé.
+
+Les hashs, eux, sont une preuve indépendante : le serveur les a enregistrés pendant la partie en
+direct, et tous concordent.
+
+---
 
 ## 9. Pièges confirmés
 
-1. **`turns[]` est creux** : seuls les tours avec intents **ou** un hash sont écrits.
-   Mesuré : `demoGame1.json` stocke **151 tours pour `num_turns = 1500`**. Utiliser `decompressGameRecord`.
-2. `version: "v0.0.2"` n'a jamais changé malgré les évolutions de schéma : router sur `gitCommit`, pas sur `version`.
-3. Unités hétérogènes : `duration` en **secondes**, `lobbyFillTime` en **millisecondes**,
+1. **`turns[]` est creux** : seuls les tours avec intents **ou** un hash sont écrits. Mesuré :
+   151 tours stockés pour `num_turns = 1500`. Utiliser `decompressGameRecord`.
+2. `version: "v0.0.2"` n'a jamais changé : router sur `gitCommit`, pas sur `version`.
+3. **`id` de la liste est une chaîne décimale** : comparer en entier, jamais en lexicographique.
+4. Unités hétérogènes : `duration` en **secondes**, `lobbyFillTime` en **millisecondes**,
    `start`/`end`/`lobbyCreatedAt` en **ms epoch**, `ALLIANCE_INDEX_LONGEST_HELD` et
    `spawnImmunityDuration` en **ticks**, `maxTimerValue`/`customAllianceDuration` en **minutes**.
-4. Les tableaux de stats s'allongent par ajout en fin : `boats[*][4]`, `gold[6]` sont absents des
-   vieux records → **toujours tester `len()`**. `conquests` était un scalaire avant d'être un tableau.
-5. `username` des vieux records : jusqu'à 1000 caractères, emoji autorisés → ne pas valider avec
+5. Les tableaux de stats s'allongent par ajout en fin (`boats[*][4]`, `gold[6]` absents des vieux
+   records) → **toujours tester `len()`**. `conquests` était un scalaire avant d'être un tableau.
+6. `username` des vieux records : jusqu'à 1000 caractères, emoji autorisés → ne pas valider avec
    `UsernameSchema` (3..27) sur l'archive.
-6. Trois états distincts : absent / `null` / valeur. Dans une stat bigint, `null` vaut **`0`**, pas « inconnu ».
-7. Unions non discriminées à décoder au runtime : `config.nations`, `config.playerTeams`,
+7. Trois états distincts : absent / `null` / valeur. Dans une stat bigint, `null` vaut **`0`**.
+8. Unions non discriminées à décoder au runtime : `config.nations`, `config.playerTeams`,
    `emoji.recipient`, et `winner` (discriminé par `[0]`).
-8. `mapDirName` = **clé de l'enum `GameMapType` en minuscules**, trouvée par reverse-lookup de la
-   valeur affichée (`src/server/MapFiles.ts`) : `"Ottoman Empire"` → `ottomanempire`.
-   Il faut donc extraire la table `valeur affichée → dossier` par commit.
-9. **Environnement** : `GID` est une variable spéciale en zsh ; `${SHA}:chemin` doit être accolé
-   (`$SHA:resources` déclenche le modificateur zsh `:r`) ; le CLI `tsx` échoue dans le sandbox
-   (`listen EPERM` sur son pipe IPC) → utiliser `node --import tsx` ; `git fetch`/`worktree add`
-   échouent dans le sandbox (`.git` en lecture seule) → hors sandbox ; le hook `rtk` **tronque la
-   sortie à 50 lignes**, donc tout comptage doit venir de `git rev-list --count`, pas de `| wc -l`.
+9. **`mapDirName` = clé de l'enum `GameMapType` en minuscules**, par reverse-lookup de la valeur
+   affichée (`src/server/MapFiles.ts`) : `"Ottoman Empire"` → `ottomanempire`. L'enum est **généré**
+   dans `packages/engine-api/src/game/Maps.gen.ts` (`Key = "Valeur affichée"`), donc la table doit
+   être extraite **par commit**.
+10. **Partager `node_modules` par un lien symbolique corromprait la re-sim en silence** : les liens
+    `node_modules/@openfront/*` sont **relatifs** (`../../packages/engine`) et résoudraient vers le
+    *mauvais* commit. D'où la copie par liens durs (`cp -al`), vérifiée par `realpathSync`.
+11. **Environnement** : `GID` est spécial en zsh ; `${SHA}:chemin` doit être accolé (`$SHA:resources`
+    déclenche le modificateur zsh `:r`) ; le CLI `tsx` échoue dans le sandbox (`listen EPERM` sur son
+    pipe IPC) → `node --import tsx` ; `git fetch`/`worktree add` échouent dans le sandbox
+    (`.git` en lecture seule) → hors sandbox ; le hook `rtk` **tronque la sortie à 50 lignes**, donc
+    tout comptage doit venir de `git rev-list --count`, jamais de `| wc -l` ;
+    `data/raw/` est protégé par la règle `Edit(./data/raw/**)` jusqu'au `mkdir` — **à régler au J1**.
 
-## 10. Ce qui reste à faire (J0 non terminé)
+---
 
-Bloqué sur : l'alias e-mail du User-Agent, mon publicID, les specs du serveur.
+## 10. Projections et volume cible proposé
 
-- [ ] `afterId` exercé en live, avec vérification de la marge de relecture.
-- [ ] Journal JSONL de toutes les requêtes (une mesure = une ligne reproductible).
-- [ ] Latences et tailles par mode (FFA, Team, ranked ffa, ranked 2v2), petite et grosse partie,
-      **et taille après `zstd`** (c'est elle qui compte pour le stockage).
-- [ ] Répartition sur 7 jours : parties par mode / map / taille / difficulté, `gitCommit` distincts,
-      % `statsAgreed`, % `publicID` null, % `"REDACTED"` — par comptage `Content-Range` + échantillon
-      aléatoire à graine fixe pour les champs qui n'existent que dans le détail.
-- [ ] % de `gitCommit` de records réellement récupérables depuis GitHub (cause d'échec du § 1, ligne 5c).
-- [ ] POC de re-sim sur **3 vraies parties** (FFA, Team, grosse) au bon commit, avec diff vide sur le
-      gagnant et les stats de chaque joueur. **C'est le critère d'acceptation du J0.**
-- [ ] Débit de re-sim par cœur, nombre de workers soutenable sous 7 Go, projection stockage et temps
-      pour 1, 6 et 12 mois, volume cible proposé.
-- [ ] Vérifier dans le viewer 2 moments d'une vraie partie.
+### 10.1 Collecte (le détail coûte 1 requête par partie, quel que soit le format)
 
-## 11. Commandes
+À 8 388 parties/jour dans le périmètre, et 39,2 Ko par record complet compressé :
+
+| période | parties | stockage complet | stockage sans `turns` | 1 req/s | 3 req/s | 10 req/s |
+|---|---|---|---|---|---|---|
+| 1 mois | 251 628 | 10,8 Go | 1,3 Go | 2,9 j | 1,0 j | 0,3 j |
+| 6 mois | 1 526 546 | 65,5 Go | 7,7 Go | 17,7 j | 5,9 j | 1,8 j |
+| 12 mois | 3 061 479 | 131,3 Go | 15,5 Go | 35,4 j | 11,8 j | 3,5 j |
+| archive (535 j) | 4 487 374 | 192,5 Go | 22,7 Go | 51,9 j | 17,3 j | 5,2 j |
+
+Les requêtes de liste sont négligeables (1 pour 1 000 parties). Le volume suppose le débit actuel
+constant dans le passé : l'activité était probablement plus faible en 2025, donc c'est un **majorant**.
+
+### 10.2 Re-simulation — c'est elle qui limite le projet
+
+Débit mesuré : **159 à 253 ticks/s par cœur** (médiane 172). Partie médiane (8 066 ticks) ≈ **49 s
+par cœur**, démarrage node+tsx inclus (1,4 s).
+
+| machine | workers soutenables | parties/jour | 1 mois d'archive |
+|---|---|---|---|
+| serveur 8 cœurs / 16 Go | **8** | 14 150 | **17,8 jours** |
+| local 20 cœurs / 7 Go | **7** (limite mémoire) | ~12 400 | ~20 jours |
+
+Pic RSS mesuré : 243 Mo (1 joueur) à **782 Mo** (95 joueurs) → compter **0,8 Go par worker**.
+Sur le local, c'est la **RAM** qui plafonne, pas les 20 cœurs.
+
+Sortie de re-sim (1 point par joueur toutes les 10 ticks) : **36 641 lignes par partie en moyenne**
+(médiane 21 554, max 357 175), à **13,6 o/ligne** en Parquet zstd (mesure DuckDB sur données
+aléatoires, donc majorant) → **487 Ko par partie en moyenne**.
+
+| parties rejouées | sortie Parquet |
+|---|---|
+| 10 000 | 4,6 Go |
+| 100 000 | 46,4 Go |
+| 1 mois d'archive (251 628) | 116,8 Go |
+
+### 10.3 Volume cible proposé
+
+Contrainte dure : **SSD de 100 Go**. Conséquences chiffrées :
+
+- Télécharger l'archive entière en records complets = 192 Go → **ne tient pas**.
+- 6 mois en complet (65,5 Go) + 100 k parties re-simulées (46,4 Go) = 112 Go → **ne tient pas non plus**.
+
+**Proposition, à ton arbitrage :**
+
+1. **Ingestion en deux étages.** Tout le périmètre en `?turns=false` (**22,7 Go pour les 535 jours**),
+   puis le record complet **seulement** pour les parties à re-simuler. Coût : ces parties sont
+   téléchargées deux fois — un écart assumé avec « jamais re-téléchargée », qui achète un facteur 6
+   sur le disque. Les stats de fin de partie, elles, suffisent déjà à toute l'analyse de population
+   (sauf `deathPosition`, cf. § 2.3).
+2. **Re-sim sur ~100 000 parties** (46 Go de sortie, **7 jours sur 8 cœurs**), priorisées comme le
+   demande la spec : mes parties, puis les maps sous-représentées, puis les plus récentes.
+   À 100 k parties et 32,7 joueurs en moyenne, cela fait ~3,3 M observations joueur — très au-delà
+   du seuil de 300 observations / 100 joueurs par groupe analysé.
+3. **Débit** : 1 req/s donne 52 jours pour tout l'historique. À 3 req/s, 17 jours. Rien n'oblige à
+   tout avoir avant de commencer l'analyse : l'ingestion peut tourner en continu pendant que les
+   jalons avancent, en commençant par le plus récent.
+
+Total disque de cette proposition : **22,7 + ~4 + 46 ≈ 73 Go**, plus 2,1 Go de clone et ~0,05 Go par
+commit de moteur. Tient dans 100 Go avec de la marge. Si tu passes à 256 Go, l'option « 12 mois en
+records complets » (131 Go) redevient possible.
+
+---
+
+## 11. Ce qui reste ouvert
+
+- Le périmètre inclut-il `publicGameType: "special"` (9,7 %) et `playerTeams: "Humans Vs Nations"`
+  (8,0 %) ? **Question pour toi.**
+- `rankedType=ffa` est vide aujourd'hui : à revérifier avant d'écrire le moindre cas particulier.
+- La corrélation `killedAt` ↔ `deathPosition` ne repose que sur 2 parties (27 paires) : à refaire sur
+  quelques centaines de parties au J3.
+- Le biais du tirage à offset aléatoire à l'intérieur d'une journée n'est pas quantifié.
+- Les 13,6 o/ligne de la sortie de re-sim viennent de données aléatoires : à remesurer sur du vrai
+  au J3 (ce sera probablement bien moins).
+- `data/raw/` n'est pas inscriptible (règle `Edit(./data/raw/**)` + sandbox) : à régler au J1.
+  Les 27 records du J0 sont dans `scratch/records/`.
+
+---
+
+## 12. Commandes
 
 ```bash
 # Clone de référence et SHA épinglé
@@ -303,34 +452,19 @@ for d in 7 30 90 365; do
        "maps=$(git -C data/openfront rev-list --count --since=${d}.days HEAD -- resources/maps)"
 done
 
-# Worktree du moteur à un commit, sans les 764 Mo de maps (hors sandbox)
-SHA=dd85bcfb8b20e599fae15298bf56db1e92947f61
-git -C data/openfront worktree add --no-checkout "$PWD/data/engines/$SHA" "$SHA"
-cd data/engines/$SHA
-git sparse-checkout init --no-cone && git sparse-checkout set '/*' '!/resources/maps/' && git checkout
-PATH=/usr/bin:$PATH /usr/bin/time -f 'wall=%es rss=%MkB' npm ci --ignore-scripts
+# Mesures API (1 req/s, journal dans scratch/requests.jsonl)
+python3 -I scratch/ofa_recon.py show /player/u8hpwHpJ          # publicID, ffaRating
+python3 -I scratch/ofa_recon.py afterid 0 5 3                  # parcours d'archive
+python3 -I scratch/ofa_recon.py counts 7                       # volumes par jour et par mode
+python3 -I scratch/ofa_recon.py sample 300                     # echantillon (graine fixe)
+python3 -I scratch/ofa_recon.py fetch <gameID>...              # record complet, zstd
+python3 -I scratch/analyse_sample.py                           # agregats du § 7.2
+python3 -I scratch/projection.py                               # projections du § 10
 
-# Matérialiser une seule map, indexée par son tree-sha (accolade obligatoire en zsh)
-TREE=$(git -C data/openfront rev-parse "${SHA}:resources/maps/pangaea")
-mkdir -p data/maps/${TREE}/pangaea
-git -C data/openfront archive --format=tar "${TREE}" | tar -x -C data/maps/${TREE}/pangaea
+# POC de re-simulation (hors sandbox : worktree + npm ci)
+python3 -I scratch/resim_poc/drive.py cPaLHdRvC2 dtQhXS8owK cDkWi2N1AT
 
-# Re-sim (node --import tsx : le CLI tsx ne passe pas le sandbox)
-cp scratch/resim_poc/ofa_runner.ts data/engines/$SHA/tests/replay/
-cd data/engines/$SHA
-PATH=/usr/bin:$PATH OFA_MAPS_DIR=$PWD/../../maps/${TREE} \
-  /usr/bin/time -f 'wall=%es rss=%MkB' \
-  node --import tsx tests/replay/ofa_runner.ts <gameID|record.json> --out out.json
-
-# Mesures API (UA provisoire ; 1 req/s, sleep 1 entre chaque)
-UA='ofa-recon/0.1 (OpenFront Analyzer; contact: github.com/openfrontio/OpenFrontIO/issues)'
-B=https://api.openfront.io/public
-W='start=2026-11-18T00:00:00Z&end=2026-11-19T00:00:00Z'
-curl -sS -A "$UA" -w '\n%{http_code} %{time_total}s %{size_download}B\n' "$B/games?$W&limit=5"
-curl -sS -A "$UA" -D- "$B/games?$W&type=Public&mode=Team&limit=1"   # Content-Range = total
-curl -sS -A "$UA" -w '\nHTTP=%{http_code} T=%{time_total}s SIZE=%{size_download}B\n' "$B/game/<id>"
-curl -sS -A "$UA" "$B/game/<id>?turns=false" | wc -c
-curl -sS -A "$UA" -w '\nHTTP=%{http_code}\n' "$B/games?$W&limit=1001"               # 400
-curl -sS -A "$UA" -w '\nHTTP=%{http_code}\n' "$B/games?start=2026-11-14T00:00:00Z&end=2026-11-18T00:00:00Z&limit=2"  # 400
-curl -sS -A "$UA" "$B/players/recently-deleted" | python3 -I -c "import sys,json;o=json.load(sys.stdin);print(len(o),list(o[0]))"
+# Mesure du cout d'une ligne de sortie Parquet
+duckdb -no-agent -c "COPY (SELECT ... FROM range(278740) AS t(i)) TO 'state.parquet' \
+  (FORMAT parquet, COMPRESSION zstd);"
 ```

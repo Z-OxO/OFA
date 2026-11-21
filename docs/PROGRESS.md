@@ -4,7 +4,7 @@ Spec : [docs/SPEC.md](SPEC.md). Décisions : [docs/adr/](adr/). Perf : [docs/PER
 
 | Jalon | État | Date |
 | --- | --- | --- |
-| J0 Reconnaissance et mesures | **en cours** — bloqué sur 3 informations | 2026-11-21 |
+| J0 Reconnaissance et mesures | **livré** — critère d'acceptation atteint ; 2 arbitrages en attente | 2026-11-21 |
 | J1 Ingestion | à faire | |
 | J2 Normalisation | à faire | |
 | J3 Re-simulation | à faire | |
@@ -15,61 +15,73 @@ Spec : [docs/SPEC.md](SPEC.md). Décisions : [docs/adr/](adr/). Perf : [docs/PER
 | J8 Couche IA | à faire | |
 | J9 Production | à faire | |
 
-## J0 — Reconnaissance et mesures (en cours)
+## J0 — Reconnaissance et mesures (livré)
 
-Livrable : [docs/RECON.md](RECON.md). Aucun code de production ; POC jetable dans `scratch/resim_poc/`.
+Livrable : [docs/RECON.md](RECON.md) (470 lignes). Aucun code de production ; scripts jetables dans
+`scratch/`. 380 requêtes API à 1 req/s, **aucun 429 ni 403**, toutes journalisées dans
+`scratch/requests.jsonl`.
 
-### Fait
+### Critère d'acceptation : ATTEINT
 
-- `docs/SPEC.md` : copie bit-à-bit de `PROMPT.md` (`cmp` silencieux, 195 lignes).
-- Clone de référence d'OpenFront dans `data/openfront/` (2,1 Go), **SHA épinglé
-  `1636e2049c3aee43384ac72521a142ef85314aba`**. Jamais modifié.
-- Exploration déléguée à 3 subagents (code lu + 12 requêtes réelles à 1 req/s) : inventaire des
-  **25 intents**, des **24 `GameUpdateType`**, des getters de `Player`, des schémas de record et de
-  stats, des endpoints publics. Les deux inventaires clés ont été recontrôlés à la main au SHA épinglé.
-- **7 des 8 faits** de « Ce qu'on sait déjà » tranchés (détail et preuves dans RECON.md), dont deux
-  corrections : `createGameRunner` est dans `GameRunner.ts`, et le viewer de replay **n'accepte
-  aucun tick de départ**.
-- Chaîne de re-sim prouvée mécaniquement : worktree sparse + `npm ci` + `node --import tsx` rejoue
-  1 500 ticks d'un vrai record en 3,4 s.
-- Déterminisme par commit démontré **par l'expérience** : le même record rejoué au mauvais commit
-  diverge dès le tour 210 (21 hashs corrects sur 150).
+3 vraies parties rejouées au commit exact du record, **diff vide** (gagnant + toutes les stats
+archivées de tous les joueurs) et **hashs 100 % identiques** :
 
-### Mesuré
+| gameID | map | mode | joueurs | ticks | hashs | débit |
+|---|---|---|---|---|---|---|
+| `cPaLHdRvC2` | Gateway to the Atlantic | FFA | 25 | 9 701 | 970/970 | 159 t/s |
+| `dtQhXS8owK` | Strait of Hormuz | Team | 24 | 5 931 | 593/593 | 253 t/s |
+| `cDkWi2N1AT` | Great Lakes | FFA | 95 | 29 342 | 2934/2934 | 172 t/s |
+
+### Les 8 faits de la spec
+
+7 vérifiés, 1 **réfuté**. Trois corrections : `createGameRunner` est dans `GameRunner.ts` ; le viewer
+de replay **n'accepte aucun tick de départ** ; `api.openfront.io/game/<id>` sans `/public` **n'est pas
+bloqué** par Cloudflare (HTTP 200 depuis un script).
+
+### Découvertes qui changent la suite
+
+- **L'API fournit déjà `ffaRating.before`** par partie publique FFA — exactement le « rating d'avant
+  la partie » du J4. Pas d'équivalent en Team. Devient l'étalon de validation du J4.
+- **`deathPosition` n'est jamais archivé** (0 sur 993 lignes joueur) : la mesure de résultat principale
+  en FFA n'existe que par re-simulation. `killedAt` n'en est qu'un proxy imparfait (Spearman −0,81 / −0,96).
+- **Le ranked 1v1 fait 10 % des parties publiques** et doit être filtré explicitement ;
+  **`rankedType=ffa` est vide** aujourd'hui.
+- **La re-simulation est le facteur limitant**, pas le téléchargement : 14 150 parties/jour sur
+  8 cœurs, contre 86 400 téléchargements/jour à 1 req/s.
+
+### Chiffres clés
 
 | Mesure | Valeur |
 | --- | --- |
-| Machine | 20 cœurs, 7 Go RAM, 927 Go libres |
-| Node conforme à `engines` | `/usr/bin/node` v24.22.3 (nvm expose un v22 non conforme) |
-| Record complet / sans `turns` | 804 156 o / 48 314 o (×16,6) |
-| Latence record / liste | 0,41 s / 1,52 s |
-| Parties publiques Team, 18/11 (1 jour) | 2 741 (via `Content-Range`) |
-| Commits OpenFront par an / versions de lockfile / versions de maps | 2 611 / 82 / 223 |
-| `npm ci` | 15,4 s, 362 Mo |
-| Re-sim | ≈ 440 ticks/s, pic RSS 243 Mo, démarrage 1,4 s |
+| Parties publiques/jour | 9 320 (6 619 FFA + 2 700 Team + 172 ranked 2v2) |
+| Périmètre ofa (hors 1v1) | **8 388/jour** |
+| Archive disponible | depuis le **2025-06-04** (535 jours, ~4,5 M parties) |
+| Record complet / sans `turns`, zstd | 39,2 Ko / **5,3 Ko** (médiane) |
+| Débit de re-sim | 159 à 253 ticks/s/cœur ; 0,8 Go par worker |
+| Coût moteur par commit distinct | 48 Mo (3 commits distincts seulement sur 300 parties de 7 jours) |
+| `statsAgreed = true` | 99,0 % |
+| `publicID` null / REDACTED (7 j récents) | 0 % / 0,03 % — mais **100 % null** en juin 2025 |
+| Maps distinctes | 103 sur 300 parties (longue traîne : 83 maps = 49 %) |
 
 ### Décisions prises (ADR)
 
-- **ADR-0001** : cache moteur = worktree sparse par sha + `node_modules` par hash de lockfile +
-  maps par tree-sha. **Pas de bundle** : mesuré inutile (1,4 s de démarrage, < 5 %).
-  C'est un écart assumé avec la lettre de la spec (« moteur compilé »).
-- **ADR-0002** : le runner part de `tests/replay/ReplayGame.ts`, qui existe déjà et compare les hashs.
-- `NODE_BIN=/usr/bin/node` partout dans la re-sim.
+- **ADR-0001** : cache moteur = worktree sparse (37 Mo) + `node_modules` par hash de lockfile copié en
+  **liens durs** + maps par tree-sha. **Pas de bundle** (mesuré inutile).
+- **ADR-0002** : le runner part de `tests/replay/ReplayGame.ts`, qui compare déjà les hashs.
+- **ADR-0003** : définition du critère de validité d'une re-sim, avec les trois champs jamais archivés.
 
-### Limites connues à ce stade
+### En attente de ton arbitrage
 
-- `afterId` documenté mais **jamais exécuté en live**.
-- Le critère d'acceptation du J0 (3 vraies parties rejouées, diff vide) **n'est pas atteint** : il
-  faut de vrais records, donc l'API.
-- Les 12 requêtes de mesure ne sont pas encore loggées en JSONL.
-- Un `gitCommit` de record peut être **irrécupérable** depuis GitHub (`upload-pack: not our ref`
-  constaté sur le record de démo) : part de records concernés inconnue.
-- Projection de volume appuyée sur un seul chiffre réel (2 741 parties Team sur une journée).
+1. **Volume cible** (RECON § 10.3) : l'archive complète en records complets fait 192 Go, le SSD en a
+   100. Proposition : ingestion en deux étages (tout en `?turns=false` = 22,7 Go, records complets
+   seulement pour les parties re-simulées) + re-sim sur ~100 k parties (46 Go, 7 jours sur 8 cœurs).
+2. **Périmètre** : inclut-on `publicGameType: "special"` (9,7 %) et
+   `playerTeams: "Humans Vs Nations"` (8,0 %) ?
 
-### Bloqué sur (toi)
+### À régler au J1
 
-1. Patch des domaines autorisés dans `.claude/settings.json` (fichier en deny pour moi) :
-   `raw.githubusercontent.com`, `api.github.com`, `objects.githubusercontent.com`, `openfront.io`.
-2. L'**alias e-mail** du projet, pour le User-Agent de toute requête à l'API.
-3. Mon **publicID**.
-4. Les **specs du serveur Debian** (cœurs / RAM / disque), pour dimensionner la re-sim.
+- `data/raw/` n'est pas inscriptible (règle `Edit(./data/raw/**)` + sandbox). Les 27 records du J0
+  sont dans `scratch/records/`.
+- Les fixtures sont déjà pré-choisies et téléchargées : 27 records couvrant FFA, Team, ranked 1v1 et
+  2v2, Humans Vs Nations, `special`, 2 joueurs à 125 joueurs, `statsAgreed=false`, un compte
+  **REDACTED**, et 3 parties de juin 2025 **sans publicID**.
