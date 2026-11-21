@@ -54,8 +54,8 @@ qui doit changer à chaque version du moteur casse les requêtes en aval et impo
 - **Le typage là où il sert.** `select avg(troops) ... where type='attack'` ne touche qu'une
   colonne ; la longue traîne de la config n'est jamais dans un `group by`.
 - **Le coût est nul en pratique** : `config_json` est hautement répétitif d'une partie à l'autre, et
-  `intents.params` est null sur 60 % des lignes (les `attack`, de loin les plus nombreux, ont tous
-  leurs champs promus).
+  `intents.params` est null sur **94,8 %** des lignes (mesure sur 1 141 612 intents de 300 parties :
+  les `attack` font 62 % du total et ont tous leurs champs promus).
 
 Une exception assumée : **les clés de `stats` n'ont pas de catch-all.** Une nouvelle stat exige une
 colonne entière typée, pas un JSON. `ofa normalize` compte les clés inconnues, les affiche et

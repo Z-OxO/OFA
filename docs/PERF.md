@@ -134,15 +134,18 @@ L'aplatissement coûte **3,3× la lecture** (270 contre 885 records/s) : c'est l
 |---|---|---|---|
 | `games` | 55 952 | **5,0 Mo** | 94 o |
 | `participants` | 2 070 777 | **208 Mo** | **105 o** |
-| `intents` | 91 784 (27 records complets) | **1,1 Mo** | **12,5 o** |
+| `intents` | 1 141 612 (300 records complets) | **12,1 Mo** | **11,2 o** |
 
-Les **12,5 o par ligne d'`intents`** valident la mesure du J0 (5,00 o/ligne pour une sortie de
-re-sim triee, 13,6 o non triee) : a 3 400 intents par partie, une partie coute 42 Ko d'intents.
+Les **11,2 o par ligne d'`intents`** encadrent la mesure du J0 (5,00 o/ligne pour une sortie de
+re-sim triee, 13,6 o non triee). A **3 805 intents par partie** (mesure sur 300 parties, contre
+3 400 estimes), une partie coute **41 Ko** d'intents : **4,0 Go** pour les 100 000 parties
+re-simulees du J3.
 
 Les 105 o par ligne de `participants` portent **98 colonnes**, dont 86 compteurs de stats souvent
 nuls : le zstd colonne par colonne les ramène à presque rien. Projection pour l'archive :
-2 654 420 parties → **~250 Mo de `games` et ~10 Go de `participants`**, à ajouter aux 26 Go de
-`data/raw/meta` (budget : 100 Go).
+2 654 420 parties → **~237 Mo de `games` et ~9,6 Go de `participants`**, plus **~4,0 Go d'`intents`**
+pour les 100 000 parties du J3, à ajouter aux 26 Go de `data/raw/meta` et aux 4,3 Go de
+`data/raw/full` (budget : 100 Go).
 
 ## À remesurer plus tard
 

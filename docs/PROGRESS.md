@@ -238,12 +238,17 @@ stat négative, flottante ou non décimale, jamais de partie sans joueur, aucun 
 | --- | --- |
 | `docs/DATA.md` documente les schémas | 42 + 98 + 14 colonnes, avec unité, nullabilité, taux de présence **mesurés sur 2 070 777 lignes**, les 3 règles de remplissage, la correspondance champ d'intent → colonne, et la liste de ce que les tables ne disent pas |
 | Tests de cohérence sur les fixtures | **24 tests**. `test_intents_par_type_identiques_au_brut` : les 23 types et les **91 784** intents recomptés sur le JSON brut, à l'identique. `test_integrite_referentielle` : `(game_id, client_id)` unique, `num_intents` égal au compte réel. `test_bigint_sans_perte` : 10 000+ valeurs comparées à `int(chaîne brute)`, aucune colonne flottante. `test_schema_stable_entre_lots` : avec `--chunk 1`, un seul schéma par table |
-| Vérification dans le viewer | deux moments de `cR4EhwxE2N` sortis des tables, avec leurs requêtes — voir ci-dessous |
+| Vérification dans le viewer | deux moments de `cR4EhwxE2N` sortis des tables (8:02 et 10:16, voir ci-dessous) : **vérifiés dans le viewer, les deux exacts** |
 
-Contre-épreuve indépendante du code : les chiffres de `duckdb` (55 952 parties, 2 070 777
-participants, 1 915 887 avec stats, `player` 37 182 / `team` 17 875 / `nation` 57 / null 838,
-`max(peak_troops)` 2 081 249 469, `max(gold_trade)` 22 202 217 393) sont **identiques** à ceux de
-l'inventaire, qui n'utilise pas une ligne de `normalize.py`.
+Deux contre-épreuves indépendantes du code :
+
+- les chiffres de `duckdb` (55 952 parties, 2 070 777 participants, 1 915 887 avec stats, `player`
+  37 182 / `team` 17 875 / `nation` 57 / null 838, `max(peak_troops)` 2 081 249 469,
+  `max(gold_trade)` 22 202 217 393) sont **identiques** à ceux de l'inventaire, qui n'utilise pas
+  une ligne de `normalize.py` ;
+- `jq` sur le record brut décompressé contre `duckdb` sur le Parquet, sur la partie `c15Lo6e7na` :
+  **863 intents, même répartition par type** (`attack` 632, `build_unit` 78, `boat` 51, `spawn` 36,
+  `allianceRequest` 30). Deux outils, deux formats, le même compte.
 
 Un troisième recoupement tombe tout seul : `num_turns / 10 = 642,2 s` contre `duration_s = 644`
 sur `cR4EhwxE2N` — **1 tick = 100 ms**, confirmé par les données.
@@ -253,10 +258,13 @@ sur `cR4EhwxE2N` — **1 tick = 100 ms**, confirmé par les données.
 | Mesure | Valeur |
 | --- | --- |
 | `ofa normalize` sur 55 952 records | **3 min 27** (270 records/s/cœur) → ~2 h 45 projetées pour l'archive |
+| `ofa fetch-full --sample 300` | 299 téléchargés, 47 écartés hors périmètre, **0 échec**, 16,7 Mo |
+| Débit du `fetch-full` à `OFA_RATE=1` | avance max **+0,000** requête sur 301, intervalle minimum 0,9999 s |
+| `intents` | **1 141 612 lignes** sur 300 parties — **3 805 par partie**, 12,1 Mo (11,2 o/ligne) |
 | Lecture du brut seule | 885 records/s/cœur, 5 540 sur 16 cœurs |
 | `games` | 55 952 lignes, **5,0 Mo** (94 o/ligne) |
 | `participants` | 2 070 777 lignes, **208 Mo** (105 o/ligne pour 98 colonnes) |
-| Projection archive | ~237 Mo de `games` + ~9,6 Go de `participants` |
+| Projection archive | ~237 Mo de `games` + ~9,6 Go de `participants` + ~4,0 Go d'`intents` pour les 100 000 parties du J3 |
 | Périmètre d'analyse | **48 100 / 55 952 = 86,0 %** des parties ingérées |
 
 ### Décisions
@@ -295,6 +303,9 @@ Partie *Surrounded*, FFA 10 joueurs, 6 422 ticks (10 min 42), gagnée par **kdc1
 1. **tick 4823 (8:02) — `kdc17` élimine `ASALVATI`.** Vient de `participants.kills`.
 2. **tick 6168 (10:16) — `kdc17` construit un MIRV**, 26 s avant la fin. Vient de `intents`.
 
+**Les deux ont été vérifiés dans le viewer le 2026-11-22 : exacts.** C'est la seule preuve que les
+tables décrivent bien la partie qui a eu lieu, et non une partie cohérente avec elle-même.
+
 ```sql
 -- moment 1
 with x as (select game_id, client_id, unnest(kills) as k
@@ -320,8 +331,11 @@ Rappel : `tick / 10` = secondes de jeu, donc `mm:ss = tick//600 : (tick%600)//10
 ### Limites connues, écrites dans DATA.md
 
 - `intents` ne couvre que les parties dont on a le **record complet** : `data/raw/meta` est
-  téléchargé sans `turns` (ADR-0004). `ofa fetch-full --sample N` en télécharge à la demande ;
-  les 27 fixtures, elles, sont des records complets (91 784 intents), ce sur quoi tournent les tests.
+  téléchargé sans `turns` (ADR-0004). **300 parties** le sont aujourd'hui (`ofa fetch-full`), soit
+  0,5 % de ce qui est ingéré ; les 27 fixtures, elles aussi complètes (91 784 intents), portent les
+  tests. Les 21 types d'intents vus sur ces 300 parties récentes **n'incluent pas** `troop_ratio`
+  ni `allianceRequestReply` : ces deux-là n'existent que dans l'archive ancienne, et c'est bien
+  pour eux que `type` est du texte libre.
 - Pas d'**équipe** en mode Team, pas de `spawnTile`/`killedBy`/`deathPosition`, pas de coordonnées
   de `tile`, pas de classement de fin de partie : tout cela est du J3.
 - **Un 0 peut vouloir dire « non suivi »** quand la stat a été ajoutée au moteur après la partie
@@ -329,6 +343,10 @@ Rappel : `tick / 10` = secondes de jeu, donc `mm:ss = tick//600 : (tick%600)//10
   vaut 0 sur toute l'archive actuelle). Pour comparer dans le temps, se fier à `git_commit`.
 - `won = false` pour un équipier déconnecté absent du tuple `winner` ; le tuple brut reste dans
   `games.winner_members`.
+- **`ofa rate-check` n'a pas de fenêtre** : le journal est partagé par toutes les commandes, donc
+  vérifier le débit d'une exécution à 1 req/s dans un journal où le J1 a tourné à 8 req/s demande
+  de filtrer à la main. Les requêtes de `fetch-full` sont les seules `/game/<id>` **sans**
+  `?turns=false`, ce qui suffit pour les isoler. À reprendre au J9, avec les timers.
 
 ### Prochaine étape : J3, re-simulation à grande échelle
 

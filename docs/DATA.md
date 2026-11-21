@@ -12,10 +12,11 @@ duckdb -c "select count(*) from 'data/parquet/games/**/*.parquet'"
 | --- | --- | --- | --- |
 | `data/parquet/games/month=YYYY-MM/part.parquet` | 1 par mois | 55 952 | 5,0 Mo |
 | `data/parquet/participants/month=YYYY-MM/part.parquet` | 1 par mois | 2 070 777 | 208 Mo |
-| `data/parquet/intents/month=YYYY-MM/part.parquet` | 1 par mois | 0 (voir plus bas) | — |
+| `data/parquet/intents/month=YYYY-MM/part.parquet` | 1 par mois | 1 141 612 | 12,1 Mo |
 
 Partition par mois de `start` (UTC), compression zstd, un groupe de lignes par lot de 2 000 records.
-Mesuré le 2026-11-22 sur les 55 952 records du J1.
+Mesuré le 2026-11-22 sur les 55 952 records du J1, dont **300 records complets** (`ofa fetch-full`)
+qui portent les 1 141 612 intents : 3 805 par partie.
 
 ## Les trois principes
 
