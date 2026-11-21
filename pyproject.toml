@@ -3,7 +3,11 @@ name = "ofa"
 version = "0.1.0"
 description = "OpenFront Analyzer : collecte, re-simulation et analyse des parties publiques d'OpenFront"
 requires-python = ">=3.12"
-dependencies = ["requests>=2.32", "zstandard>=0.23"]
+dependencies = [
+    "pyarrow>=26",
+    "requests>=2.32",
+    "zstandard>=0.23",
+]
 
 [project.scripts]
 ofa = "ofa.cli:main"

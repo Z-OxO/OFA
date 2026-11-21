@@ -6,7 +6,7 @@ Spec : [docs/SPEC.md](SPEC.md). Décisions : [docs/adr/](adr/). Perf : [docs/PER
 | --- | --- | --- |
 | J0 Reconnaissance et mesures | **terminé** | 2026-11-21 |
 | J1 Ingestion | **terminé** — les 5 critères atteints | 2026-11-21 |
-| J2 Normalisation | à faire | |
+| J2 Normalisation | **terminé** | 2026-11-22 |
 | J3 Re-simulation | à faire | |
 | J4 Niveau | à faire | |
 | J5 Moteur d'analyse | à faire | |
@@ -189,7 +189,150 @@ la main doit être refaite dès qu'on a du volume.
 3. **Les fixtures choisies pour couvrir des cas limites ne représentent pas la distribution** :
    5,3 Ko sur 27 records, 8,3 Ko sur 55 405.
 
-### Prochaine étape : J2, normalisation sans re-simulation
+## J2 — Normalisation (terminé)
+
+### Code
+
+| Module | Rôle |
+| --- | --- |
+| `ofa/normalize.py` | les 3 tables Parquet : tables déclaratives des stats et des intents, schémas pyarrow explicites, reconstruction totale avec échange de répertoires |
+| `ofa/ingest.py` | `fetch_full` : etage 2 de l'ADR-0004, le record complet d'un echantillon (tirage a graine fixe) |
+| `ofa/cli.py` | `ofa normalize`, `ofa fetch-full` |
+| `docs/DATA.md` | les schémas, les 3 règles de remplissage, et **ce que les tables ne disent pas** |
+| `docs/adr/0007-colonnes-et-catch-all.md` | l'arbitrage de schéma qui engage le J4, le J5 et le J6 |
+
+`uv run pytest -q -m "not slow and not network"` : **52 tests, 12 s** (28 du J1 + 24 du J2).
+`ruff check .` propre. Dépendance ajoutée : `pyarrow>=26`.
+
+### La méthode : inventorier avant de dessiner le schéma
+
+Le J1 a appris qu'une projection faite sur 27 fixtures choisies à la main se trompe de 36 %. Le
+schéma Parquet étant ce qu'il y a de plus coûteux à rattraper (le J4, le J5 et le J6 le liront
+pendant des mois), il a été dessiné sur **l'inventaire exhaustif des 55 952 records** —
+2 070 777 lignes joueur, **10,1 s** en 16 processus — et non sur un échantillon.
+
+**Zéro anomalie** sur les invariants testés : jamais de `clientID` dupliqué dans une partie, jamais
+de `clientID` ni de `gitCommit` manquant, **jamais de `persistentID` non nul**, jamais de valeur de
+stat négative, flottante ou non décimale, jamais de partie sans joueur, aucun record illisible.
+
+### Ce que l'inventaire a changé dans le schéma
+
+| Fait mesuré | Ce que le schéma naïf aurait fait |
+| --- | --- |
+| Les tableaux de stats sont **tronqués à droite** : `units.city` a 4 valeurs sur 1 534 804 lignes et 1 seule sur 58 951, pour une dimension de 5 | lire `v[4]` et planter, ou décaler les colonnes |
+| Les clés de stats sont écrites **paresseusement** : `bombs` sur 578 630 lignes contre 1 915 887 pour `gold` | prendre une absence pour un trou, alors que c'est un zéro |
+| `stats` est **absent ou `null` sur 154 890 lignes (7,5 %)** | écrire 0 partout et mentir : d'où `has_stats` et les colonnes à NULL |
+| `killedAt` (63,2 %) et `finalTiles` (29,3 %) ne sont **pas** des compteurs | `killed_at = 0` voudrait dire « tué au tick 0 » |
+| `gold_trade` monte à **22 202 217 393** (35 bits) | un `i32` débordait silencieusement |
+| `winner` peut valoir **`nation`** (57 parties) et est absent sur 838 | 2 valeurs attendues au lieu de 3, et `won = false` au lieu de « inconnu » |
+| `players[].team` **n'existe jamais** (0 / 2 070 777) ; `teamIndex` sur 0,2 % | croire qu'on peut connaître les équipes sans le moteur |
+| `config.playerTeams` est une **union int\|str** : 13 463 int, 4 871 chaînes | un `i32` sur `"Humans Vs Nations"` |
+| La config a **29 clés** dont des **éteintes** (`disableNPCs` en juin 2025) et des **apparues** (`startingGold`) | une migration de schéma à chaque version du moteur |
+| 2 **types d'intents** de l'archive ne sont plus dans `Schemas.ts` : `troop_ratio` (1 392×), `allianceRequestReply` (486×) | un enum, et 1 878 intents perdus |
+| **56 % des références joueur d'un intent** ne sont pas dans `players[]` (51 304 / 91 784) : bots et nations | une contrainte d'intégrité qui échoue sur un cas majoritaire |
+| Les ids de bots sont tous en minuscules — **mais 12 humains sur 993 aussi** | router sur la casse et se tromper 12 fois |
+
+### Critères d'acceptation : les 3 atteints
+
+| Critère | Preuve |
+| --- | --- |
+| `docs/DATA.md` documente les schémas | 42 + 98 + 14 colonnes, avec unité, nullabilité, taux de présence **mesurés sur 2 070 777 lignes**, les 3 règles de remplissage, la correspondance champ d'intent → colonne, et la liste de ce que les tables ne disent pas |
+| Tests de cohérence sur les fixtures | **24 tests**. `test_intents_par_type_identiques_au_brut` : les 23 types et les **91 784** intents recomptés sur le JSON brut, à l'identique. `test_integrite_referentielle` : `(game_id, client_id)` unique, `num_intents` égal au compte réel. `test_bigint_sans_perte` : 10 000+ valeurs comparées à `int(chaîne brute)`, aucune colonne flottante. `test_schema_stable_entre_lots` : avec `--chunk 1`, un seul schéma par table |
+| Vérification dans le viewer | deux moments de `cR4EhwxE2N` sortis des tables, avec leurs requêtes — voir ci-dessous |
+
+Contre-épreuve indépendante du code : les chiffres de `duckdb` (55 952 parties, 2 070 777
+participants, 1 915 887 avec stats, `player` 37 182 / `team` 17 875 / `nation` 57 / null 838,
+`max(peak_troops)` 2 081 249 469, `max(gold_trade)` 22 202 217 393) sont **identiques** à ceux de
+l'inventaire, qui n'utilise pas une ligne de `normalize.py`.
+
+Un troisième recoupement tombe tout seul : `num_turns / 10 = 642,2 s` contre `duration_s = 644`
+sur `cR4EhwxE2N` — **1 tick = 100 ms**, confirmé par les données.
+
+### Mesures
+
+| Mesure | Valeur |
+| --- | --- |
+| `ofa normalize` sur 55 952 records | **3 min 27** (270 records/s/cœur) → ~2 h 45 projetées pour l'archive |
+| Lecture du brut seule | 885 records/s/cœur, 5 540 sur 16 cœurs |
+| `games` | 55 952 lignes, **5,0 Mo** (94 o/ligne) |
+| `participants` | 2 070 777 lignes, **208 Mo** (105 o/ligne pour 98 colonnes) |
+| Projection archive | ~237 Mo de `games` + ~9,6 Go de `participants` |
+| Périmètre d'analyse | **48 100 / 55 952 = 86,0 %** des parties ingérées |
+
+### Décisions
+
+- **ADR-0007** : **colonnes chaudes + catch-all verbatim**. `games.config_json` garde la config
+  entière, `intents.params` tous les champs non promus. Rien n'est perdu quand le moteur change, et
+  aucune migration n'est nécessaire. Exception assumée : **les stats n'ont pas de catch-all** — une
+  clé inconnue est comptée, affichée et fait **sortir en code 1**, parce qu'une nouvelle stat exige
+  une colonne typée. Mesuré 0 clé inconnue sur 2 070 777 lignes, donc l'alarme ne peut vouloir dire
+  qu'une chose. C'est volontairement le cas de `killedBy`, `deathPosition` et `spawnTile`, déclarés
+  par le moteur mais jamais archivés.
+- **Reconstruction totale, jamais d'incrémental.** 3 min 27 aujourd'hui. C'est aussi ce qui propage
+  la purge jusqu'aux Parquet : `ofa purge-deleted` touche `data/raw/`, il faut enchaîner
+  `ofa normalize` (à câbler dans les timers du J9).
+- **pyarrow pour écrire, pas Polars.** Un `pa.schema` déclaré et un `ParquetWriter` par (table,
+  mois) rendent impossible le piège qui aurait coûté le plus cher : avec une inférence par lot, une
+  colonne entièrement nulle dans un lot prend le type `Null` et `int64` au lot suivant, et les deux
+  fichiers deviennent illisibles ensemble par `read_parquet('**')`. Un test le vérifie avec
+  `--chunk 1`. Polars viendra au J4, pour lire.
+- **Noms de colonnes en `snake_case` anglais**, calqués sur les champs du record. La doc reste en
+  français, et DATA.md n'est qu'une table de traduction.
+- **L'équipe est reportée au J3.** Réimplémenter `humanTeams` + le nombre de nations par map **au
+  commit** dupliquerait de la logique moteur pour un champ que `player.team()` donnera gratuitement
+  quand le moteur tournera.
+- **Colonne `seq` dans `intents`** : le moteur crée une Execution par intent dans l'ordre du tour.
+  Sans cette colonne, cet ordre n'aurait été porté que par l'ordre des lignes, que SQL ne garantit
+  pas — et il aurait été irrécupérable sans re-normaliser.
+- **Le hors-périmètre est normalisé**, avec `in_scope`. Filtrer est une clause `where` ;
+  re-télécharger ne l'est pas.
+
+### Les deux moments à vérifier dans le viewer
+
+`https://replay.openfront.io/cR4EhwxE2N` (ou `https://openfront.io/#replay-viewer=cR4EhwxE2N`).
+Partie *Surrounded*, FFA 10 joueurs, 6 422 ticks (10 min 42), gagnée par **kdc17**.
+
+1. **tick 4823 (8:02) — `kdc17` élimine `ASALVATI`.** Vient de `participants.kills`.
+2. **tick 6168 (10:16) — `kdc17` construit un MIRV**, 26 s avant la fin. Vient de `intents`.
+
+```sql
+-- moment 1
+with x as (select game_id, client_id, unnest(kills) as k
+           from 'data/parquet/participants/**/*.parquet' where game_id='cR4EhwxE2N')
+select x.k.tick::int tick, p.username tueur, v.username victime
+from x join 'data/parquet/participants/**/*.parquet' p
+       on p.game_id=x.game_id and p.client_id=x.client_id
+     left join 'data/parquet/participants/**/*.parquet' v
+       on v.game_id=x.game_id and v.client_id=x.k.victim
+order by tick;
+
+-- moment 2
+select i.tick, p.username, i.type, i.unit
+from 'data/parquet/intents/**/*.parquet' i
+join 'data/parquet/participants/**/*.parquet' p
+  on p.game_id=i.game_id and p.client_id=i.client_id
+where i.game_id='cR4EhwxE2N' and i.unit in ('Atom Bomb','Hydrogen Bomb','MIRV')
+order by i.tick;
+```
+
+Rappel : `tick / 10` = secondes de jeu, donc `mm:ss = tick//600 : (tick%600)//10`.
+
+### Limites connues, écrites dans DATA.md
+
+- `intents` ne couvre que les parties dont on a le **record complet** : `data/raw/meta` est
+  téléchargé sans `turns` (ADR-0004). `ofa fetch-full --sample N` en télécharge à la demande ;
+  les 27 fixtures, elles, sont des records complets (91 784 intents), ce sur quoi tournent les tests.
+- Pas d'**équipe** en mode Team, pas de `spawnTile`/`killedBy`/`deathPosition`, pas de coordonnées
+  de `tile`, pas de classement de fin de partie : tout cela est du J3.
+- **Un 0 peut vouloir dire « non suivi »** quand la stat a été ajoutée au moteur après la partie
+  (`attacks_max_recv` sur juin 2025, `boats_*_lost`, `gold_donate_recv`, et `units_*_upgrade` qui
+  vaut 0 sur toute l'archive actuelle). Pour comparer dans le temps, se fier à `git_commit`.
+- `won = false` pour un équipier déconnecté absent du tuple `winner` ; le tuple brut reste dans
+  `games.winner_members`.
+
+### Prochaine étape : J3, re-simulation à grande échelle
+
+### Note du J1 : ce qui avait été anticipé pour le J2
 
 Tables Parquet `games`, `participants` (stats aplaties en colonnes nommées) et `intents`
 (une ligne par action : tick, joueur, type, cible, paramètres décodés), plus `docs/DATA.md`.

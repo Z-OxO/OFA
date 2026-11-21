@@ -5,7 +5,7 @@ import json
 import sys
 from pathlib import Path
 
-from . import config, fixtures, index, ingest, purge
+from . import config, fixtures, index, ingest, normalize, purge
 from .client import CircuitOpen, Client, rate_report
 
 
@@ -86,6 +86,35 @@ def cmd_fixtures(args) -> int:
     return 1 if summary["failed"] else 0
 
 
+def cmd_normalize(args) -> int:
+    """Reconstruit les trois tables Parquet depuis data/raw. Toujours tout, jamais d'incremental.
+
+    `full` avant `meta` : quand on a le record complet d'une partie, c'est lui qui est
+    normalise, et c'est le seul qui porte les intents.
+    """
+    cfg = config.load()
+    out = Path(args.out) if args.out else cfg.data_dir / "parquet"
+    report = normalize.rebuild([cfg.raw_full, cfg.raw_meta], out, chunk=args.chunk)
+    print(json.dumps({k: v for k, v in report.items() if k != "files"}, ensure_ascii=False))
+    if report["unknown_stats"]:
+        print(
+            "CLES DE STATS INCONNUES (le moteur a change, il manque des colonnes) : "
+            f"{report['unknown_stats']}",
+            file=sys.stderr,
+        )
+        return 1
+    return 0
+
+
+def cmd_fetch_full(args) -> int:
+    """Telecharge le record COMPLET (avec `turns`) d'un echantillon de parties deja ingerees."""
+    cfg = config.load()
+    prepare(cfg)
+    summary = ingest.fetch_full(cfg, Client(cfg), args.sample, args.seed)
+    print(json.dumps(summary))
+    return 1 if summary["failed"] else 0
+
+
 def cmd_rate_check(args) -> int:
     """Prouve, apres coup, que le debit configure n'a pas ete depasse.
 
@@ -133,6 +162,16 @@ def main(argv: list[str] | None = None) -> int:
 
     p = sub.add_parser("fixtures", help="telecharge les vrais records de test")
     p.set_defaults(func=cmd_fixtures)
+
+    p = sub.add_parser("normalize", help="reconstruit les tables Parquet depuis data/raw")
+    p.add_argument("--out", default=None, help="repertoire de sortie (defaut: data/parquet)")
+    p.add_argument("--chunk", type=int, default=2000, help="records par groupe de lignes")
+    p.set_defaults(func=cmd_normalize)
+
+    p = sub.add_parser("fetch-full", help="telecharge les records complets (avec turns)")
+    p.add_argument("--sample", type=int, required=True, help="nombre de parties visees")
+    p.add_argument("--seed", type=int, default=20261121, help="graine du tirage (reproductible)")
+    p.set_defaults(func=cmd_fetch_full)
 
     p = sub.add_parser("rate-check", help="verifie le debit dans le journal des requetes")
     p.add_argument("--log", default=None)

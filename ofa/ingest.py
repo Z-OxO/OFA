@@ -13,12 +13,13 @@ Sûreté à la reprise (critère d'acceptation du J1) :
 
 import json
 import os
+import random
 import sqlite3
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 
-from . import api, index, raw
+from . import api, index, normalize, raw
 from .client import Client
 from .config import ARCHIVE_START, Config
 
@@ -220,3 +221,41 @@ def ingest_days(
         for k, v in s.errors.items():
             total.errors[k] = total.errors.get(k, 0) + v
     return total
+
+
+def fetch_full(cfg: Config, client: Client, sample: int, seed: int) -> dict:
+    """Etage 2 de l'ADR-0004 : le record COMPLET (avec `turns`) d'un echantillon de parties.
+
+    `data/raw/meta` est telecharge avec `?turns=false`, donc la table `intents` du J2 n'existe
+    que pour les parties dont on a le record complet. Tirage a graine fixe, donc reproductible :
+    relancer la meme commande redemande les memes parties, et celles deja la ne coutent rien.
+    """
+    game_ids = list(raw.iter_game_ids(cfg.raw_meta))
+    random.Random(seed).shuffle(game_ids)
+    summary = {
+        "present": 0,
+        "downloaded": 0,
+        "bytes": 0,
+        "skipped_out_of_scope": 0,
+        "failed": {},
+    }
+    chosen = 0
+    for game_id in game_ids:
+        if chosen >= sample:
+            break
+        if raw.exists(cfg.raw_full, game_id):
+            summary["present"] += 1
+            chosen += 1
+            continue
+        info = json.loads(raw.read(cfg.raw_meta, game_id))["info"]
+        if not normalize.in_scope(info):
+            summary["skipped_out_of_scope"] += 1
+            continue
+        resp = api.get_game(client, game_id, turns=True)
+        if resp.status != 200:
+            summary["failed"][str(resp.status)] = summary["failed"].get(str(resp.status), 0) + 1
+            continue
+        summary["bytes"] += raw.write(cfg.raw_full, game_id, resp.body)
+        summary["downloaded"] += 1
+        chosen += 1
+    return summary

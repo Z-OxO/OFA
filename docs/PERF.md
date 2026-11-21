@@ -111,6 +111,39 @@ où les 12 % manquants représentent une demi-journée.
 Le limiteur, lui, n'est jamais en cause : l'avance sur l'échéancier reste à +0,000 dans les deux
 configurations, donc aucune rafale n'a eu lieu.
 
+## Normalisation (J2, mesures sur les 55 952 records du J1)
+
+| Étape | Débit | Total |
+|---|---|---|
+| Lecture zstd + `json.loads` seuls | **885 records/s/cœur** | 63 s pour 55 952 |
+| Idem sur 16 cœurs (`ProcessPoolExecutor`) | **5 540 records/s** | **10,1 s** (134 s CPU) |
+| `ofa normalize` complet (parse + aplatissement + Parquet) | **270 records/s/cœur** | **3 min 27** |
+
+Soit **~2 h 45 projetées** pour les 2 654 420 parties de l'archive, en un seul cœur. C'est
+acceptable pour une reconstruction quotidienne sur une machine allumée en permanence, et c'est la
+raison pour laquelle il n'y a pas de normalisation incrémentale : paralléliser par préfixe de 2
+caractères (comme l'inventaire ci-dessus, 16× mesuré) reste un changement de 10 lignes si le besoin
+apparaît.
+
+L'aplatissement coûte **3,3× la lecture** (270 contre 885 records/s) : c'est la conversion des
+2 070 777 × 86 valeurs de stats et l'encodage Arrow, pas le JSON.
+
+### Tailles Parquet (zstd, 1 fichier par mois et par table)
+
+| Table | Lignes | Taille | Par ligne |
+|---|---|---|---|
+| `games` | 55 952 | **5,0 Mo** | 94 o |
+| `participants` | 2 070 777 | **208 Mo** | **105 o** |
+| `intents` | 91 784 (27 records complets) | **1,1 Mo** | **12,5 o** |
+
+Les **12,5 o par ligne d'`intents`** valident la mesure du J0 (5,00 o/ligne pour une sortie de
+re-sim triee, 13,6 o non triee) : a 3 400 intents par partie, une partie coute 42 Ko d'intents.
+
+Les 105 o par ligne de `participants` portent **98 colonnes**, dont 86 compteurs de stats souvent
+nuls : le zstd colonne par colonne les ramène à presque rien. Projection pour l'archive :
+2 654 420 parties → **~250 Mo de `games` et ~10 Go de `participants`**, à ajouter aux 26 Go de
+`data/raw/meta` (budget : 100 Go).
+
 ## À remesurer plus tard
 
 - [ ] Les 5,00 o/ligne viennent de séries synthétiques réalistes : à confirmer sur la vraie sortie du J3.
