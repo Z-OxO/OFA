@@ -164,14 +164,20 @@ class Client:
         return last
 
 
-def rate_report(log_path: Path) -> dict:
+def rate_report(log_path: Path, rate: float) -> dict:
     """Ce que le journal dit du débit réellement appliqué.
 
-    La garantie du limiteur est un **intervalle minimum** de 1/R entre deux départs de
-    requête : c'est donc lui qu'on vérifie. Le comptage sur fenêtre glissante est donné
-    pour information, avec sa limite : quand l'espacement vaut exactement 1/R, une gigue
-    d'un dixième de milliseconde fait apparaître R+1 requêtes dans la fenêtre, sans que
-    le débit soit dépassé pour autant.
+    Le bon critère est l'**avance sur l'échéancier idéal** : le limiteur planifie la
+    i-ème requête à `t0 + i/R`, donc `i - R*(t_i - t_0)` ne doit jamais dépasser 1
+    (la première requête part sans attendre). Cette grandeur est insensible à la gigue
+    de l'ordonnanceur et détecte toute rafale, même brève.
+
+    Les deux autres mesures sont indicatives et trompeuses prises seules :
+      - l'intervalle minimum descend de quelques millisecondes sous 1/R parce que
+        l'horodatage est pris après le réveil, pas à l'instant planifié (mesuré :
+        6,6 % des intervalles, le pire à -5 %, pour une avance réelle nulle) ;
+      - le comptage sur fenêtre glissante d'une seconde vaut R+1 dès que l'espacement
+        est exactement 1/R.
     """
     stamps = sorted(
         json.loads(line)["ts"] for line in log_path.read_text().splitlines() if line.strip()
@@ -179,10 +185,13 @@ def rate_report(log_path: Path) -> dict:
     if len(stamps) < 2:
         return {
             "requests": len(stamps),
+            "max_advance": 0.0,
             "min_interval": None,
             "max_in_window": len(stamps),
             "mean_rate": None,
         }
+    t0 = stamps[0]
+    max_advance = max(i - rate * (t - t0) for i, t in enumerate(stamps))
     intervals = [b - a for a, b in zip(stamps[:-1], stamps[1:], strict=True)]
     worst, start = 0, 0
     for end in range(len(stamps)):
@@ -191,7 +200,8 @@ def rate_report(log_path: Path) -> dict:
         worst = max(worst, end - start + 1)
     return {
         "requests": len(stamps),
+        "max_advance": max_advance,
         "min_interval": min(intervals),
         "max_in_window": worst,
-        "mean_rate": (len(stamps) - 1) / (stamps[-1] - stamps[0]),
+        "mean_rate": (len(stamps) - 1) / (stamps[-1] - t0),
     }

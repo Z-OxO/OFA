@@ -99,25 +99,30 @@ def test_chaque_requete_est_journalisee(cfg, clock):
 
 
 def test_rate_report_detecte_une_vraie_rafale(tmp_path):
+    """5 requetes en 40 ms a 4 req/s : l'avance sur l'echeancier doit accuser."""
     log = tmp_path / "requests.jsonl"
     stamps = [100.0, 100.01, 100.02, 100.03, 100.04, 200.0]
     log.write_text("".join(json.dumps({"ts": t}) + "\n" for t in stamps))
-    r = rate_report(log)
-    assert r["requests"] == 6
+    r = rate_report(log, 4.0)
+    assert r["max_advance"] > 3.0
     assert r["max_in_window"] == 5
-    assert r["min_interval"] == pytest.approx(0.01)  # c'est ca qui accuse, pas la fenetre
 
 
-def test_rate_report_ne_signale_pas_un_faux_depassement(tmp_path):
-    """Espacement parfait a 4 req/s : l'intervalle minimum doit valoir 0,25 s.
+def test_rate_report_tolere_la_gigue_de_lordonnanceur(tmp_path):
+    """Cas reellement observe sur 21 545 requetes d'une vraie ingestion.
 
-    Piege trouve lors de la premiere vraie execution : avec un espacement exactement
-    egal a 1/R, une gigue de 0,1 ms fait compter R+1 requetes dans une fenetre d'une
-    seconde. La garantie reelle du limiteur est l'intervalle minimum, pas ce comptage.
+    6,6 % des intervalles descendent sous 1/R parce que l'horodatage est pris apres le
+    reveil, le pire a -5 %. L'avance sur l'echeancier, elle, reste nulle : aucune rafale.
+    Ni l'intervalle minimum ni le comptage sur fenetre ne savent faire cette difference.
     """
+    import random
+
+    rng = random.Random(7)
     log = tmp_path / "requests.jsonl"
-    stamps = [i * 0.25 - (0.0001 if i % 3 else 0) for i in range(40)]
+    # Echeancier exact a 4 req/s, plus une gigue positive de 0 a 13 ms sur l'horodatage.
+    stamps = [i * 0.25 + rng.uniform(0, 0.013) for i in range(2000)]
     log.write_text("".join(json.dumps({"ts": t}) + "\n" for t in stamps))
-    r = rate_report(log)
-    assert r["min_interval"] >= 0.2498
-    assert r["mean_rate"] == pytest.approx(4.0, abs=0.01)
+    r = rate_report(log, 4.0)
+    assert r["min_interval"] < 0.25  # l'intervalle minimum accuse a tort
+    assert r["max_in_window"] == 5  # la fenetre glissante aussi
+    assert r["max_advance"] <= 1.0  # l'avance, non : c'est elle qui compte

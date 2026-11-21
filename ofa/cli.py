@@ -89,21 +89,21 @@ def cmd_fixtures(args) -> int:
 def cmd_rate_check(args) -> int:
     """Prouve, apres coup, que le debit configure n'a pas ete depasse.
 
-    Le critere est l'intervalle minimum entre deux departs de requete : c'est la
-    garantie que donne le limiteur. 1 % de tolerance pour la gigue d'horloge.
+    Critere : l'avance sur l'echeancier ideal. Le limiteur planifie la i-eme requete a
+    t0 + i/R, donc i - R*(t_i - t_0) ne doit jamais depasser 1.
     """
     cfg = config.load()
     path = Path(args.log or cfg.log_dir / "requests.jsonl")
-    r = rate_report(path)
-    requis = 1.0 / cfg.rate
-    print(f"requetes journalisees   : {r['requests']}")
+    r = rate_report(path, cfg.rate)
+    print(f"requetes journalisees    : {r['requests']}")
     if r["min_interval"] is None:
         print("pas assez de requetes pour conclure")
         return 0
-    print(f"intervalle minimum      : {r['min_interval']:.4f} s  (requis >= {requis:.4f} s)")
-    print(f"debit moyen             : {r['mean_rate']:.2f} req/s  (configure {cfg.rate})")
-    print(f"max sur 1 s (indicatif) : {r['max_in_window']}")
-    ok = r["min_interval"] >= requis * 0.99
+    print(f"avance max sur l'echeancier: {r['max_advance']:+.3f} requete  (doit rester <= 1)")
+    print(f"debit moyen              : {r['mean_rate']:.2f} req/s  (configure {cfg.rate})")
+    print(f"intervalle minimum       : {r['min_interval']:.4f} s  (indicatif, gigue de l'OS)")
+    print(f"max sur 1 s              : {r['max_in_window']}  (indicatif)")
+    ok = r["max_advance"] <= 1.0
     print("VERDICT :", "debit respecte" if ok else "DEBIT DEPASSE")
     return 0 if ok else 1
 
