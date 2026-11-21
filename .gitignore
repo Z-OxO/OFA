@@ -11,3 +11,25 @@ node_modules/
 CLAUDE.local.md
 # Vrais records (contiennent des pseudos) : à garder hors d'un repo public
 tests/fixtures/*.zst
+.ofa-contact
+
+# Fichiers vides crees par le sandbox de Claude Code comme points de montage.
+# Aucun contenu : supprimables sans risque.
+/.bashrc
+/.bash_profile
+/.zshrc
+/.zprofile
+/.profile
+/.gitconfig
+/.gitmodules
+/.ripgreprc
+/.mcp.json
+/.idea
+/.vscode
+/.claude/commands
+/.claude/workflows
+/.claude/routines
+/.claude/output-styles
+/.claude/launch.json
+/.claude/loop.md
+/.claude/scheduled_tasks.json
