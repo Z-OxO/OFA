@@ -49,19 +49,47 @@ Trois vraies parties, rejouées au commit exact du record (détail dans `RECON.m
 
 ## Stockage
 
+### Compression du brut : pistes explorées, rien de matériel à gagner
+
+Sur les 27 records réels du J0 (1 507 536 o pour le plus gros) :
+
+| Option | Résultat |
+|---|---|
+| `zstd -9` | 198 522 o en **0,03 s** |
+| **`zstd -19`** (retenu) | **169 343 o** en 0,54 s |
+| `xz -9e` | 163 116 o en 1,35 s → **+3,7 % de gain pour 2,5× le temps** |
+| **Dictionnaire zstd** entraîné sur 13 records, appliqué aux 14 autres | **+4,0 % seulement** |
+| **Archive solide** (27 records en un seul flux zstd) | **+5,1 %**, au prix de l'adressage par partie |
+
+Conclusion : `zstd -19` par fichier est à ~5 % de la meilleure option réaliste, tout en gardant
+un fichier par partie. Les dictionnaires n'aident pas ici parce que les records sont assez gros
+pour que zstd trouve seul leur redondance.
+
+### Tailles
+
 | Mesure | Valeur |
 |---|---|
-| Record complet, zstd -19 | **médiane 39,2 Ko** (×2,3 à ×9,1 de compression) |
+| Record complet, zstd -19 | **médiane 39,2 Ko**, moyenne ~45 Ko (×2,3 à ×9,1) |
 | Record sans `turns`, zstd -19 | **médiane 5,3 Ko** (×6 plus petit, **même nombre de requêtes**) |
 | Sortie de re-sim, 1 point/joueur/10 ticks | **36 641 lignes/partie** en moyenne (médiane 21 554, max 357 175) |
-| Coût d'une ligne en Parquet zstd | **13,6 o** (DuckDB, données aléatoires → **majorant**) |
-| → sortie de re-sim par partie | **487 Ko** en moyenne |
+| Coût d'une ligne, Parquet zstd, **données aléatoires entrelacées** | 13,6 o |
+| Coût d'une ligne, Parquet zstd, **séries réalistes triées par (joueur, tick)** | **5,00 o** |
+| → sortie de re-sim par partie | **179 Ko** en moyenne |
 
-Projections complètes et volume cible proposé : `RECON.md` § 10.
+Le tri par `(small_id, tick)` et des séries monotones suffisent à diviser la taille par **2,7**.
+C'est la seule optimisation de stockage qui change les ordres de grandeur : à retenir au J3,
+avec un `ROW_GROUP_SIZE` de l'ordre de 100 000.
+
+| parties re-simulées | sortie Parquet |
+|---|---|
+| 100 000 | **17,1 Go** |
+| 200 000 | 34,1 Go |
+| 1 mois d'archive (251 628) | 42,9 Go |
+
+Projections complètes et volume cible : `RECON.md` § 10.
 
 ## À remesurer plus tard
 
-- [ ] 13,6 o/ligne sur de vraies séries temporelles (J3) : ce sera probablement bien moins.
+- [ ] Les 5,00 o/ligne viennent de séries synthétiques réalistes : à confirmer sur la vraie sortie du J3.
 - [ ] Débit de re-sim avec N workers en parallèle (contention mémoire et cache).
 - [ ] Temps de lecture des Parquet par le site (cible : 95 % < 300 ms, J6).
-- [ ] zstd -19 est lent à la compression : comparer -9 et -12 sur le débit d'ingestion (J1).

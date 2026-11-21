@@ -70,13 +70,23 @@ bloqué** par Cloudflare (HTTP 200 depuis un script).
 - **ADR-0002** : le runner part de `tests/replay/ReplayGame.ts`, qui compare déjà les hashs.
 - **ADR-0003** : définition du critère de validité d'une re-sim, avec les trois champs jamais archivés.
 
-### En attente de ton arbitrage
+### Arbitrages
 
-1. **Volume cible** (RECON § 10.3) : l'archive complète en records complets fait 192 Go, le SSD en a
-   100. Proposition : ingestion en deux étages (tout en `?turns=false` = 22,7 Go, records complets
-   seulement pour les parties re-simulées) + re-sim sur ~100 k parties (46 Go, 7 jours sur 8 cœurs).
-2. **Périmètre** : inclut-on `publicGameType: "special"` (9,7 %) et
-   `playerTeams: "Humans Vs Nations"` (8,0 %) ?
+- **Périmètre : arrêté.** FFA et Team classiques + ranked 2v2. Exclus : ranked 1v1 (10 % des parties
+  publiques), `publicGameType: "special"` (9,7 %) et `playerTeams: "Humans Vs Nations"` (8,0 %).
+  Soit ~6 800 parties/jour, ~3,6 M sur les 535 jours d'archive.
+- **Débit : 2 req/s** avec 2 requêtes en parallèle (380 requêtes à 1 req/s sans aucun 429/403 ;
+  la doc décrit elle-même le parcours complet de l'archive). Jamais de recherche de la limite.
+- **Volume : en attente de ta décision sur le disque.** Scénario A (≥ 400 Go) = records complets
+  pour tout, ~225 Go, aucune partie téléchargée deux fois. Scénario B (100 Go) = deux étages,
+  ~61 Go. Détail chiffré dans RECON § 10.3.
+
+### Compression : exploré, rien à gagner
+
+Dictionnaire zstd entraîné **+4,0 %**, archive solide **+5,1 %**, `xz -9e` **+3,7 %** pour 2,5× le
+temps → `zstd -19` par fichier reste le bon choix. En revanche, trier la sortie de re-sim par
+`(joueur, tick)` fait passer une ligne Parquet de **13,6 à 5,00 o** : 179 Ko par partie au lieu
+de 487 Ko.
 
 ### À régler au J1
 

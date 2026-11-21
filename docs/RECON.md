@@ -386,53 +386,80 @@ Pic RSS mesuré : 243 Mo (1 joueur) à **782 Mo** (95 joueurs) → compter **0,8
 Sur le local, c'est la **RAM** qui plafonne, pas les 20 cœurs.
 
 Sortie de re-sim (1 point par joueur toutes les 10 ticks) : **36 641 lignes par partie en moyenne**
-(médiane 21 554, max 357 175), à **13,6 o/ligne** en Parquet zstd (mesure DuckDB sur données
-aléatoires, donc majorant) → **487 Ko par partie en moyenne**.
+(médiane 21 554, max 357 175). Coût d'une ligne en Parquet zstd, mesuré avec DuckDB :
+**13,6 o** sur des données aléatoires entrelacées, mais **5,00 o** sur des séries réalistes triées
+par `(small_id, tick)` — le tri et la monotonie divisent la taille par **2,7**.
+Retenu : **5,00 o/ligne → 179 Ko par partie en moyenne.**
 
 | parties rejouées | sortie Parquet |
 |---|---|
-| 10 000 | 4,6 Go |
-| 100 000 | 46,4 Go |
-| 1 mois d'archive (251 628) | 116,8 Go |
+| 100 000 | **17,1 Go** |
+| 200 000 | 34,1 Go |
+| 1 mois d'archive (251 628) | 42,9 Go |
+
+**Compression du brut : pistes explorées, rien de matériel à gagner.** Dictionnaire zstd entraîné
+→ **+4,0 %** sur des records jamais vus ; archive solide (tous les records en un flux) → **+5,1 %**
+au prix de l'adressage par partie ; `xz -9e` → **+3,7 %** pour 2,5× le temps. `zstd -19` par fichier
+est donc le bon choix. Détail dans `PERF.md`.
 
 ### 10.3 Volume cible proposé
 
-Contrainte dure : **SSD de 100 Go**. Conséquences chiffrées :
+Le périmètre est arrêté : **FFA et Team classiques + ranked 2v2**, en excluant le ranked 1v1,
+`publicGameType: "special"` et `playerTeams: "Humans Vs Nations"` — soit environ **6 800 parties/jour**
+(8 388 moins ~18 %), et de l'ordre de **3,6 M parties** pour les 535 jours d'archive.
 
-- Télécharger l'archive entière en records complets = 192 Go → **ne tient pas**.
-- 6 mois en complet (65,5 Go) + 100 k parties re-simulées (46,4 Go) = 112 Go → **ne tient pas non plus**.
+Deux scénarios chiffrés, selon le disque :
 
-**Proposition, à ton arbitrage :**
+**A — disque ≥ 400 Go (recommandé) : records complets pour tout le périmètre.**
 
-1. **Ingestion en deux étages.** Tout le périmètre en `?turns=false` (**22,7 Go pour les 535 jours**),
-   puis le record complet **seulement** pour les parties à re-simuler. Coût : ces parties sont
-   téléchargées deux fois — un écart assumé avec « jamais re-téléchargée », qui achète un facteur 6
-   sur le disque. Les stats de fin de partie, elles, suffisent déjà à toute l'analyse de population
-   (sauf `deathPosition`, cf. § 2.3).
-2. **Re-sim sur ~100 000 parties** (46 Go de sortie, **7 jours sur 8 cœurs**), priorisées comme le
-   demande la spec : mes parties, puis les maps sous-représentées, puis les plus récentes.
-   À 100 k parties et 32,7 joueurs en moyenne, cela fait ~3,3 M observations joueur — très au-delà
-   du seuil de 300 observations / 100 joueurs par groupe analysé.
-3. **Débit** : 1 req/s donne 52 jours pour tout l'historique. À 3 req/s, 17 jours. Rien n'oblige à
-   tout avoir avant de commencer l'analyse : l'ingestion peut tourner en continu pendant que les
-   jalons avancent, en commençant par le plus récent.
+| poste | volume |
+|---|---|
+| Records complets, archive entière (3,6 M × ~45 Ko) | ~155 Go |
+| Sortie de re-sim pour 200 k parties | 34 Go |
+| Parquet normalisés (games, participants, intents, événements) | ~25 Go |
+| Clone OpenFront + moteurs en cache (~150 commits) | ~9 Go |
+| **Total** | **~225 Go** |
 
-Total disque de cette proposition : **22,7 + ~4 + 46 ≈ 73 Go**, plus 2,1 Go de clone et ~0,05 Go par
-commit de moteur. Tient dans 100 Go avec de la marge. Si tu passes à 256 Go, l'option « 12 mois en
-records complets » (131 Go) redevient possible.
+Avantages : aucune partie n'est téléchargée deux fois (la règle de la spec est respectée à la
+lettre), et **n'importe quelle partie peut être re-simulée plus tard sans retourner voir l'API** —
+ce qui compte, parce que changer ce qu'on extrait au J3 impose de tout rejouer (7 à 14 jours), mais
+jamais de tout retélécharger.
 
----
+**B — disque 100 Go : ingestion en deux étages.**
+
+| poste | volume |
+|---|---|
+| Tout le périmètre en `?turns=false` (3,6 M × 5,3 Ko) | 19 Go |
+| Records complets pour les 100 k parties re-simulées | 4 Go |
+| Sortie de re-sim pour 100 k parties | 17 Go |
+| Parquet normalisés | ~12 Go |
+| Clone + moteurs | ~9 Go |
+| **Total** | **~61 Go** |
+
+Coût : les parties re-simulées sont téléchargées deux fois (écart assumé avec « jamais
+re-téléchargée »), et re-simuler une partie non prévue au départ exige un nouveau téléchargement.
+
+**Débit.** Rien n'est documenté, aucun en-tête `RateLimit-*`, et **380 requêtes à 1 req/s n'ont
+produit aucun 429 ni 403**. La documentation décrit elle-même le parcours de toute l'archive par
+`afterId`, donc des clients en masse sont attendus. Retenu : **2 req/s avec 2 requêtes en
+parallèle**, backoff sur 429/403/5xx, pause après erreurs répétées, et **aucune tentative de
+trouver la limite**. À ce débit, l'archive entière se télécharge en **21 jours** (scénario A) ou
+**21 jours** également en B (le nombre de requêtes est le même ; seul le disque change).
+
+Ce délai n'est pas bloquant : l'ingestion part du plus récent vers le passé et tourne en continu
+pendant que les jalons avancent. Et de toute façon **la re-simulation reste le facteur limitant** :
+100 k parties = 7 jours sur 8 cœurs, 200 k = 14 jours.
 
 ## 11. Ce qui reste ouvert
 
-- Le périmètre inclut-il `publicGameType: "special"` (9,7 %) et `playerTeams: "Humans Vs Nations"`
-  (8,0 %) ? **Question pour toi.**
+- Périmètre **arrêté** : FFA et Team classiques + ranked 2v2 ; exclus le ranked 1v1,
+  `publicGameType: "special"` et `playerTeams: "Humans Vs Nations"`.
 - `rankedType=ffa` est vide aujourd'hui : à revérifier avant d'écrire le moindre cas particulier.
 - La corrélation `killedAt` ↔ `deathPosition` ne repose que sur 2 parties (27 paires) : à refaire sur
   quelques centaines de parties au J3.
 - Le biais du tirage à offset aléatoire à l'intérieur d'une journée n'est pas quantifié.
-- Les 13,6 o/ligne de la sortie de re-sim viennent de données aléatoires : à remesurer sur du vrai
-  au J3 (ce sera probablement bien moins).
+- Les 5,00 o/ligne de la sortie de re-sim viennent de séries synthétiques réalistes : à confirmer
+  sur la vraie sortie du J3.
 - `data/raw/` n'est pas inscriptible (règle `Edit(./data/raw/**)` + sandbox) : à régler au J1.
   Les 27 records du J0 sont dans `scratch/records/`.
 
