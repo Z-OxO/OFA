@@ -7,7 +7,7 @@
 
 Le serveur dispose de **100 Go de SSD**. Le périmètre arrêté (FFA et Team classiques + ranked 2v2,
 sans ranked 1v1, sans `publicGameType: "special"`, sans `Humans Vs Nations`) représente
-**~6 800 parties/jour** et **~3,6 M parties** sur les 535 jours d'archive.
+**~8 500 parties/jour à ingérer** et **2 654 420 parties** sur la période exploitable (2025-09-12 → 2026-11-21, ADR-0005).
 
 Mesures du J0 : un record complet pèse **~45 Ko** compressé en moyenne (médiane 39,2 Ko), le même
 record **sans `turns`** pèse **5,3 Ko** (×6), et **le nombre de requêtes est identique dans les deux
@@ -19,7 +19,7 @@ archive solide +5,1 %, `xz -9e` +3,7 % — rien de matériel à gagner (`PERF.md
 | | Volume | Verdict |
 |---|---|---|
 | **A** — records complets sur toute l'archive | 164 Go de brut, ~225 Go au total | **ne tient pas** dans 100 Go |
-| **B** — `?turns=false` partout + record complet pour les parties re-simulées | 19 + 4 + 17 (re-sim) + 12 (Parquet) + 9 (clone et moteurs) = **~61 Go** | retenu |
+| **B** — `?turns=false` partout + record complet pour les parties re-simulées | 13,4 + 4 + 17 (re-sim) + 12 (Parquet) + 9 (clone et moteurs) = **~55 Go** | retenu |
 | **C** — records complets limités aux 6 derniers mois | 56 + 17 + 12 + 9 = **~94 Go** | tient, mais **aucune marge** et on perd l'historique 2025 |
 
 ## Choix
@@ -32,7 +32,7 @@ data/raw/meta/<2 premiers caracteres du gameID>/<gameID>.json.zst   # reponse de
 data/raw/full/<2 premiers caracteres du gameID>/<gameID>.json.zst   # reponse complete
 ```
 
-Cible : `meta` pour **tout** le périmètre (~3,6 M parties, 19 Go), `full` pour les **~100 000 parties
+Cible : `meta` pour **tout** le public sauf le ranked 1v1 (**2 654 420 parties, 13,4 Go**), `full` pour les **~100 000 parties
 re-simulées** (4 Go), priorisées comme le demande la spec — mes parties, puis les maps
 sous-représentées, puis les plus récentes.
 
@@ -41,8 +41,8 @@ sous-représentées, puis les plus récentes.
 L'analyse de population (usage 1 de la spec) n'a besoin que des stats de fin de partie, qui sont
 intégralement dans la réponse `?turns=false`. Les `turns` ne servent qu'à la re-simulation, et la
 re-simulation est de toute façon **plafonnée par le CPU, pas par le disque** : 14 150 parties/jour
-sur 8 cœurs, soit 7 jours pour 100 000 parties. Stocker les `turns` de 3,6 M parties qu'on ne
-rejouera jamais coûterait 145 Go pour rien.
+sur 8 cœurs, soit 7 jours pour 100 000 parties. Stocker les `turns` de 2,65 M parties qu'on ne
+rejouera jamais coûterait 106 Go pour rien.
 
 L'option C tiendrait, mais elle sacrifie l'historique 2025 **et** ne laisse aucune marge, alors que
 l'option B garde l'archive entière pour l'analyse de population et laisse ~39 Go libres.
@@ -59,7 +59,7 @@ l'option B garde l'archive entière pour l'analyse de population et laisse ~39 G
 
 ## Comment vérifier
 
-- `du -sh data/raw/meta data/raw/full` doit suivre la trajectoire 19 Go / 4 Go.
+- `du -sh data/raw/meta data/raw/full` doit suivre la trajectoire 13,4 Go / 4 Go.
 - Le compteur de requêtes des logs d'ingestion doit montrer **0 requête** pour une partie déjà
   présente dans l'étage demandé (critère d'acceptation du J1).
 - Le ratio `full/meta` doit rester proche du nombre de parties effectivement re-simulées : s'il

@@ -429,20 +429,23 @@ de 60 %) :
 |---|---|
 | Période exploitable | **435 jours** (2025-09-12 → 2026-11-21) |
 | Parties publiques sur la période | 2 979 145 |
-| **Parties à ingérer (périmètre)** | **2 224 428** |
+| **Parties à ingérer** (tout le public sauf ranked 1v1, seul filtre possible depuis la liste) | **2 654 420** |
+| Parties du périmètre d'**analyse** (sans `special` ni Humans Vs Nations) | 2 224 428 |
 
 **Architecture retenue : ingestion en deux étages** (ADR-0004), imposée par les 100 Go de disque.
 
 | poste | volume |
 |---|---|
-| `data/raw/meta/` — tout le périmètre en `?turns=false` | **11,2 Go** |
+| `data/raw/meta/` — tout le public sauf ranked 1v1, en `?turns=false` | **13,4 Go** |
 | `data/raw/full/` — records complets des 100 k parties re-simulées | 4,3 Go |
 | Sortie de re-sim, 100 k parties à 179 Ko | 17,1 Go |
 | Parquet normalisés | ~12 Go |
 | Clone OpenFront + moteurs en cache | ~9 Go |
 | **Total** | **~54 Go sur 100 Go** |
 
-**Durée de collecte** : 25,7 jours à 1 req/s, **12,9 jours à 2 req/s**, 6,4 jours à 4 req/s.
+**Durée de collecte** : 30,7 jours à 1 req/s, 15,4 jours à 2 req/s, **7,7 jours à 4 req/s** (retenu,
+ADR-0006). `publicGameType` étant absent de la liste, `special` ne peut pas être filtré avant
+téléchargement : on l'ingère et on l'exclut à l'analyse.
 Non bloquant : l'ingestion part du plus récent vers le passé, tourne en tâche de fond, et l'analyse
 commence sur les données récentes dès les premières heures. **La re-simulation reste le facteur
 limitant** : 100 k parties = 7 jours sur 8 cœurs.

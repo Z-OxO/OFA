@@ -9,8 +9,9 @@ __pycache__/
 node_modules/
 .claude/settings.local.json
 CLAUDE.local.md
-# Vrais records (contiennent des pseudos) : à garder hors d'un repo public
-tests/fixtures/*.zst
+# Vrais records (contiennent de vrais pseudonymes) : jamais dans git.
+# Le motif doit couvrir les sous-repertoires par prefixe : tests/fixtures/<xx>/<id>.json.zst
+tests/fixtures/
 .ofa-contact
 
 # Fichiers vides crees par le sandbox de Claude Code comme points de montage.

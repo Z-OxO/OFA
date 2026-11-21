@@ -4,8 +4,8 @@ Spec : [docs/SPEC.md](SPEC.md). Décisions : [docs/adr/](adr/). Perf : [docs/PER
 
 | Jalon | État | Date |
 | --- | --- | --- |
-| J0 Reconnaissance et mesures | **terminé** — critère d'acceptation atteint, arbitrages tranchés | 2026-11-21 |
-| J1 Ingestion | à faire | |
+| J0 Reconnaissance et mesures | **terminé** | 2026-11-21 |
+| J1 Ingestion | **en cours** — 4 critères sur 5 atteints | 2026-11-21 |
 | J2 Normalisation | à faire | |
 | J3 Re-simulation | à faire | |
 | J4 Niveau | à faire | |
@@ -110,3 +110,51 @@ de 487 Ko.
 - Les fixtures sont déjà pré-choisies et téléchargées : 27 records couvrant FFA, Team, ranked 1v1 et
   2v2, Humans Vs Nations, `special`, 2 joueurs à 125 joueurs, `statsAgreed=false`, un compte
   **REDACTED**, et 3 parties de juin 2025 **sans publicID**.
+
+
+## J1 — Ingestion (en cours)
+
+### Code
+
+| Module | Rôle |
+| --- | --- |
+| `ofa/config.py` | configuration par variables d'environnement, contact hors du code |
+| `ofa/client.py` | **seul** chemin vers l'API : intervalle minimum garanti, backoff, coupe-circuit, journal JSONL |
+| `ofa/api.py` | enveloppes des endpoints (`afterId`, fenêtre temporelle, record, comptes supprimés) |
+| `ofa/raw.py` | stockage zstd, écriture atomique (`.tmp` + `os.replace`) |
+| `ofa/index.py` | index sqlite publicID → parties, reconstructible, pour la purge |
+| `ofa/ingest.py` | deux parcours : fenêtres de jours (récent d'abord) et `afterId` (toute l'archive) |
+| `ofa/purge.py` | expurge les comptes supprimés de `data/raw` et de l'index |
+| `ofa/fixtures.py` | les 27 vrais records du jeu de tests, avec la raison de chacun |
+| `ofa/cli.py` | `ofa ingest`, `purge-deleted`, `fixtures`, `rate-check` |
+
+`uv run pytest -q -m "not slow and not network"` : **28 tests, 3,7 s**. `ruff check .` propre.
+
+### Critères d'acceptation
+
+| Critère | État | Preuve |
+| --- | --- | --- |
+| Une relance fait 0 requête pour les parties déjà présentes | **atteint** | test + vraie exécution : 2ᵉ passage = **2 requêtes** (les 2 pages de liste), 32 parties sautées |
+| `kill -9` en plein milieu puis reprise, ni trou ni doublon | **atteint** | `test_kill_au_milieu_puis_reprise_sans_trou_ni_doublon` ; coût exact de la reprise : **1 requête refaite**, celle qui était en vol |
+| Test de purge sur fixture | **atteint** | `test_purge_de_bout_en_bout_sur_fixture` : le bon joueur et lui seul est expurgé, les 24 autres sont intacts |
+| Le débit configuré n'est jamais dépassé | **atteint** | vraie exécution à `OFA_RATE=4` : intervalle minimum **0,2499 s** pour 0,2500 s requis, débit moyen 3,85 req/s, aucun 429/403 |
+| 7 jours des modes ciblés ingérés | **bloqué** | `data/raw/` n'est pas inscriptible depuis ma session (règle `Edit(./data/raw/**)`) |
+
+### Décisions
+
+- **ADR-0006** : 4 req/s pour le rattrapage (7,7 jours pour 2 654 420 parties), 1 req/s en régime
+  permanent. Jamais de recherche de la limite.
+- Deux parcours, pas deux modes : `--days N` (récent d'abord, pour l'incrémental et les
+  journées récentes) et `--backfill` (`afterId`, du plus ancien au plus récent, pour l'historique).
+  Relancer suffit : une journée terminée ou une partie déjà là ne coûte aucune requête.
+- Le périmètre d'**ingestion** (89,1 % du public, tout sauf ranked 1v1) est plus large que le
+  périmètre d'**analyse** (74,7 %) : `publicGameType` étant absent de la liste, `special` ne peut
+  pas être filtré avant téléchargement.
+
+### Deux pièges trouvés en route
+
+1. **Un lien symbolique sur `node_modules` corromprait la re-sim en silence** (déjà noté au J0).
+2. **Mesurer un débit par comptage sur fenêtre glissante donne un faux positif** quand l'espacement
+   vaut exactement 1/R : une gigue de 0,1 ms fait apparaître R+1 requêtes en une seconde. Le bon
+   critère est l'intervalle minimum entre deux départs. Trouvé à la première vraie exécution,
+   couvert par un test de non-régression.
