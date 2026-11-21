@@ -71,17 +71,30 @@ bloqué** par Cloudflare (HTTP 200 depuis un script).
 - **ADR-0003** : définition du critère de validité d'une re-sim, avec les trois champs jamais archivés.
 - **ADR-0004** : ingestion en deux étages (`data/raw/meta/` pour tout, `data/raw/full/` à la demande),
   imposée par les 100 Go de disque ; coût assumé : +2,8 % de requêtes.
+- **ADR-0005** : l'archive exploitable commence au 2025-09-12, date d'apparition de `publicID`.
 
-### Arbitrages
+### Arbitrages (tous tranchés)
 
-- **Périmètre : arrêté.** FFA et Team classiques + ranked 2v2. Exclus : ranked 1v1 (10 % des parties
-  publiques), `publicGameType: "special"` (9,7 %) et `playerTeams: "Humans Vs Nations"` (8,0 %).
-  Soit ~6 800 parties/jour, ~3,6 M sur les 535 jours d'archive.
-- **Débit : 2 req/s** avec 2 requêtes en parallèle (380 requêtes à 1 req/s sans aucun 429/403 ;
-  la doc décrit elle-même le parcours complet de l'archive). Jamais de recherche de la limite.
-- **Volume : arrêté.** Disque maintenu à 100 Go → **ingestion en deux étages** (ADR-0004) :
-  `?turns=false` pour tout le périmètre (~3,6 M parties, 19 Go) et record complet pour les
-  ~100 k parties re-simulées (4 Go). Total projeté ~61 Go, soit ~39 Go de marge.
+- **Périmètre** : FFA et Team classiques + ranked 2v2. Exclus : ranked 1v1, `publicGameType: "special"`,
+  `playerTeams: "Humans Vs Nations"`. Les exclusions se recoupant, le périmètre vaut **74,7 %** des
+  parties publiques.
+- **Borne de l'archive : 2025-09-12** (ADR-0005). Mesuré : `publicID` est à 0 % le 2025-09-10 (3 parties)
+  et à 100 % le 2025-09-12 (3 parties). Les 100 jours antérieurs sont abandonnés — sans `publicID`,
+  aucune ligne joueur n'est attribuable à un compte.
+- **Volume : 2 224 428 parties** sur 435 jours, intégré depuis 6 mesures d'activité réelles
+  (4 036 parties/jour en octobre 2025 contre 9 791 en novembre 2026 : extrapoler le débit actuel
+  surestimait de 60 %).
+- **Ingestion en deux étages** (ADR-0004) : `data/raw/meta/` pour tout (11,2 Go),
+  `data/raw/full/` pour les 100 k parties re-simulées (4,3 Go). **Total projeté ~54 Go sur 100 Go.**
+- **Débit : 2 req/s**, 2 en parallèle → 12,9 jours pour toute l'archive. Jamais de recherche de la limite.
+- **Suffisance statistique : largement acquise.** Re-sim de 100 k parties stratifiée sur 40 maps × 2 modes
+  → 11 768 observations par (map, mode, tranche de niveau), soit **39× le seuil de 300**.
+
+### Piège majeur : `statsAgreed` n'existe que depuis ~le 2026-10-15
+
+Soit 5 semaines d'archive. Filtrer l'analyse dessus jetterait ~97 % des données. Le critère
+d'acceptation du J3 reste satisfiable (~238 000 parties concernées), mais **la validité d'une re-sim
+se prouve par les hashs**, présents sur tout l'historique (ADR-0003).
 
 ### Compression : exploré, rien à gagner
 

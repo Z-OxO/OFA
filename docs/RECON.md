@@ -68,11 +68,20 @@ prouve) ou **NON VÉRIFIÉE**. Les commandes sont au § 12 ; chaque requête API
    (8,0 %) sont des parties publiques d'un genre à part (ex. Team HvN avec 100 bots). La spec ne dit
    pas si elles entrent dans le périmètre : **question ouverte**, elles sont pour l'instant incluses
    dans les comptages « Team ».
-8. **`persistentID` est exposé comme clé mais vaut `null`** sur l'API publique (57/57 joueurs testés) :
+8. **Les champs du record sont apparus par vagues.** Mesuré par sondage mensuel sur toute l'archive :
+   `publicID` passe de 0 % à 100 % le **2025-09-11/12** ; `lobbyCreatedAt` et `lobbyFillTime`
+   apparaissent entre novembre et décembre 2025 ; `tribes` entre juillet et août 2026 ;
+   `publicGameType` entre août et septembre 2026 ; **`statsAgreed` seulement vers le 2026-10-15**.
+   Conséquences : l'archive exploitable commence au **2025-09-12** (ADR-0005), et **`statsAgreed`
+   n'est pas un filtre utilisable** (5 semaines d'archive seulement).
+9. **L'activité a plus que doublé en un an** : 4 036 parties publiques/jour le 2025-10-02, 3 499 le
+   2025-12-01, 7 221 le 2026-02-01, 7 253 le 2026-05-01, 7 839 le 2026-08-01, 9 791 le 2026-11-01.
+   Extrapoler le débit actuel sur le passé surestime le volume de ~60 %.
+10. **`persistentID` est exposé comme clé mais vaut `null`** sur l'API publique (57/57 joueurs testés) :
    l'interdiction de le stocker est déjà satisfaite par la source.
-9. **`access-control-allow-origin: https://openfront.io`** : usage serveur-à-serveur uniquement, le
+11. **`access-control-allow-origin: https://openfront.io`** : usage serveur-à-serveur uniquement, le
    site ne pourra jamais appeler l'API depuis le navigateur.
-10. Endpoints utiles non cités par la spec : `/public/player/:id/games` (**contient `map`** et
+12. Endpoints utiles non cités par la spec : `/public/player/:id/games` (**contient `map`** et
     `result`), `/public/player/:id/sessions` (**`clientId` par partie → jointure clientID ↔ publicID**),
     `/public/leaderboard/ranked` (elo, mais **top 50 × 2 pages par ladder** seulement).
 
@@ -402,55 +411,63 @@ Retenu : **5,00 o/ligne → 179 Ko par partie en moyenne.**
 au prix de l'adressage par partie ; `xz -9e` → **+3,7 %** pour 2,5× le temps. `zstd -19` par fichier
 est donc le bon choix. Détail dans `PERF.md`.
 
-### 10.3 Volume cible proposé
+### 10.3 Volume cible — arrêté
 
-Le périmètre est arrêté : **FFA et Team classiques + ranked 2v2**, en excluant le ranked 1v1,
-`publicGameType: "special"` et `playerTeams: "Humans Vs Nations"` — soit environ **6 800 parties/jour**
-(8 388 moins ~18 %), et de l'ordre de **3,6 M parties** pour les 535 jours d'archive.
+**Périmètre** : FFA et Team classiques + ranked 2v2. Exclus : ranked 1v1, `publicGameType: "special"`,
+`playerTeams: "Humans Vs Nations"`. Les exclusions se recoupent (union 76 parties sur 300, somme 83),
+donc le périmètre vaut **74,7 %** des parties publiques, pas 72 %.
 
-**Décision : disque maintenu à 100 Go → scénario B** (voir `adr/0004-ingestion-deux-etages.md`).
+**Borne basse de l'archive : 2025-09-12** (ADR-0005), date à laquelle `publicID` passe de 0 % à 100 %.
+Les 100 jours antérieurs sont abandonnés : sans `publicID`, aucune ligne joueur n'est attribuable à
+un compte, donc ni rating, ni comparaison d'un joueur avec lui-même, ni bootstrap par joueur.
 
-Les deux scénarios chiffrés :
+**Volume intégré à partir de 6 mesures réelles** (l'activité a plus que doublé : 4 036 parties
+publiques/jour le 2025-10-02 contre 9 791 le 2026-11-01, donc extrapoler le débit actuel surestimait
+de 60 %) :
 
-**A — disque ≥ 400 Go : records complets pour tout le périmètre.** *(écarté : disque insuffisant)*
+| | valeur |
+|---|---|
+| Période exploitable | **435 jours** (2025-09-12 → 2026-11-21) |
+| Parties publiques sur la période | 2 979 145 |
+| **Parties à ingérer (périmètre)** | **2 224 428** |
+
+**Architecture retenue : ingestion en deux étages** (ADR-0004), imposée par les 100 Go de disque.
 
 | poste | volume |
 |---|---|
-| Records complets, archive entière (3,6 M × ~45 Ko) | ~155 Go |
-| Sortie de re-sim pour 200 k parties | 34 Go |
-| Parquet normalisés (games, participants, intents, événements) | ~25 Go |
-| Clone OpenFront + moteurs en cache (~150 commits) | ~9 Go |
-| **Total** | **~225 Go** |
-
-Avantages : aucune partie n'est téléchargée deux fois (la règle de la spec est respectée à la
-lettre), et **n'importe quelle partie peut être re-simulée plus tard sans retourner voir l'API** —
-ce qui compte, parce que changer ce qu'on extrait au J3 impose de tout rejouer (7 à 14 jours), mais
-jamais de tout retélécharger.
-
-**B — disque 100 Go : ingestion en deux étages.** *(RETENU)*
-
-| poste | volume |
-|---|---|
-| Tout le périmètre en `?turns=false` (3,6 M × 5,3 Ko) | 19 Go |
-| Records complets pour les 100 k parties re-simulées | 4 Go |
-| Sortie de re-sim pour 100 k parties | 17 Go |
+| `data/raw/meta/` — tout le périmètre en `?turns=false` | **11,2 Go** |
+| `data/raw/full/` — records complets des 100 k parties re-simulées | 4,3 Go |
+| Sortie de re-sim, 100 k parties à 179 Ko | 17,1 Go |
 | Parquet normalisés | ~12 Go |
-| Clone + moteurs | ~9 Go |
-| **Total** | **~61 Go** |
+| Clone OpenFront + moteurs en cache | ~9 Go |
+| **Total** | **~54 Go sur 100 Go** |
 
-Coût : les parties re-simulées sont téléchargées deux fois (écart assumé avec « jamais
-re-téléchargée »), et re-simuler une partie non prévue au départ exige un nouveau téléchargement.
+**Durée de collecte** : 25,7 jours à 1 req/s, **12,9 jours à 2 req/s**, 6,4 jours à 4 req/s.
+Non bloquant : l'ingestion part du plus récent vers le passé, tourne en tâche de fond, et l'analyse
+commence sur les données récentes dès les premières heures. **La re-simulation reste le facteur
+limitant** : 100 k parties = 7 jours sur 8 cœurs.
 
-**Débit.** Rien n'est documenté, aucun en-tête `RateLimit-*`, et **380 requêtes à 1 req/s n'ont
-produit aucun 429 ni 403**. La documentation décrit elle-même le parcours de toute l'archive par
-`afterId`, donc des clients en masse sont attendus. Retenu : **2 req/s avec 2 requêtes en
-parallèle**, backoff sur 429/403/5xx, pause après erreurs répétées, et **aucune tentative de
-trouver la limite**. À ce débit, l'archive entière se télécharge en **21 jours** (scénario A) ou
-**21 jours** également en B (le nombre de requêtes est le même ; seul le disque change).
+### 10.4 A-t-on assez de données ? Oui, largement
 
-Ce délai n'est pas bloquant : l'ingestion part du plus récent vers le passé et tourne en continu
-pendant que les jalons avancent. Et de toute façon **la re-simulation reste le facteur limitant** :
-100 k parties = 7 jours sur 8 cœurs, 200 k = 14 jours.
+Seuil de la spec : ≥ 300 observations **et** ≥ 100 joueurs distincts par groupe analysé.
+Dans le périmètre, une partie compte **37,7 joueurs humains** en moyenne.
+
+| | parties disponibles dans l'archive |
+|---|---|
+| map de rang 1 (World, 8,0 %) | ~178 700 |
+| map de rang 10 (1,8 %) | ~39 700 |
+| map de rang 20 (1,3 %) | ~29 800 |
+| map de rang 40 (0,9 %) | ~19 900 |
+
+Avec une re-sim de 100 000 parties **stratifiée sur 40 maps × 2 modes** : 1 250 parties par cellule,
+soit **47 070 observations**, et **11 768 observations par (map, mode, tranche de niveau)** avec
+4 tranches — soit **39 fois le seuil de 300**. L'objectif « au moins 40 maps analysées séparément »
+est donc atteignable sans tension.
+
+Réserve honnête : les parts des maps de rang > 10 sont estimées sur un échantillon de 224 parties,
+donc la part du rang 40 (0,9 %) ne repose que sur ~2 parties observées. Même en divisant cette
+estimation par 10, il resterait ~2 000 parties disponibles pour cette map, de quoi en re-simuler
+quelques centaines — ce qui suffit encore au seuil.
 
 ## 11. Ce qui reste ouvert
 
