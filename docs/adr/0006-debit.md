@@ -39,8 +39,10 @@ la liste), sur la période exploitable 2025-09-12 → 2026-11-21.
 
 ## Choix
 
-- **Rattrapage historique : 8 req/s**, 4 connexions simultanées (`OFA_RATE=8`, `OFA_CONCURRENCY=4`).
-  Il faut ~4 requêtes en vol pour tenir 8 req/s avec une latence mesurée de 0,4 s par record.
+- **Rattrapage historique : 8 req/s**, 6 connexions simultanées (`OFA_RATE=8`, `OFA_CONCURRENCY=6`).
+  Le débit atteignable est `concurrency / latence`, pas le débit configuré : mesuré, 4 workers pour
+  0,57 s de latence sous charge parallèle ne donnent que 7,0 req/s. Il faut donc
+  `concurrency >= rate x latence`, plus une marge.
 - **Incrémental quotidien : 1 req/s** (`OFA_RATE=1`). Il ne traite que ~8 500 parties/jour, soit
   moins de 2 h 30 à ce débit : le débit élevé est une **pointe unique**, pas une charge permanente.
 - Limiteur à **intervalle minimum** (1/R entre deux départs), donc aucune rafale possible.

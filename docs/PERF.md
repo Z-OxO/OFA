@@ -88,6 +88,29 @@ avec un `ROW_GROUP_SIZE` de l'ordre de 100 000.
 
 Projections complètes et volume cible : `RECON.md` § 10.
 
+## Ingestion (J1, mesures sur la vraie API)
+
+| Configuration | Débit effectif | Avance sur l'échéancier | Codes HTTP |
+|---|---|---|---|
+| `OFA_RATE=4`, 1 requête en vol (séquentiel) | **3,56 req/s** | +0,000 | 42 034 × 200 |
+| `OFA_RATE=8`, `OFA_CONCURRENCY=4` | **7,01 req/s** | +0,000 | 601 × 200 |
+
+Aucun 429, aucun 403 sur l'ensemble. Taille moyenne constatée : **5,1 Ko par partie** compressée
+(42 426 parties pour 217 Mo), cohérent avec les 5,3 Ko médians mesurés au J0.
+
+**Règle de dimensionnement de la concurrence.** Le débit atteignable est
+`concurrency / latence`, et non le débit configuré :
+
+- séquentiel : 1 / (0,25 + 0,03) = 3,6 req/s — c'est ce qui était mesuré ;
+- 4 workers, latence 0,57 s par record sous charge parallèle : 4 / 0,57 = **7,0 req/s**.
+
+Pour viser réellement R req/s, il faut donc `concurrency >= R x latence`, plus une marge :
+à 8 req/s et 0,57 s de latence, **6 workers** au lieu de 4. À appliquer au rattrapage historique,
+où les 12 % manquants représentent une demi-journée.
+
+Le limiteur, lui, n'est jamais en cause : l'avance sur l'échéancier reste à +0,000 dans les deux
+configurations, donc aucune rafale n'a eu lieu.
+
 ## À remesurer plus tard
 
 - [ ] Les 5,00 o/ligne viennent de séries synthétiques réalistes : à confirmer sur la vraie sortie du J3.

@@ -79,10 +79,12 @@ def load(root: Path | None = None) -> Config:
     return Config(
         data_dir=data_dir,
         # 8 req/s pour le rattrapage historique, 1 req/s pour l'incrémental quotidien
-        # (OFA_RATE=1) : voir docs/adr/0006-debit.md. Il faut ~4 requêtes en vol pour
-        # tenir 8 req/s avec une latence de 0,4 s par record.
+        # (OFA_RATE=1) : voir docs/adr/0006-debit.md.
         rate=_env_float("OFA_RATE", 8.0),
-        concurrency=_env_int("OFA_CONCURRENCY", 4),
+        # Le débit atteignable est concurrency / latence, pas le débit configuré :
+        # mesuré 4 workers / 0,57 s = 7,0 req/s au lieu de 8. Il faut donc
+        # concurrency >= rate x latence, plus une marge (docs/PERF.md).
+        concurrency=_env_int("OFA_CONCURRENCY", 6),
         contact=contact_from_environment(root),
         timeout=_env_float("OFA_TIMEOUT", 120.0),
         max_consecutive_errors=_env_int("OFA_MAX_CONSECUTIVE_ERRORS", 3),
