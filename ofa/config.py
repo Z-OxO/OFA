@@ -78,10 +78,11 @@ def load(root: Path | None = None) -> Config:
     data_dir = Path(os.environ.get("OFA_DATA_DIR", root / "data"))
     return Config(
         data_dir=data_dir,
-        # 4 req/s pour le rattrapage historique, 1 req/s pour l'incrémental quotidien
-        # (OFA_RATE=1) : voir docs/adr/0006-debit.md.
-        rate=_env_float("OFA_RATE", 4.0),
-        concurrency=_env_int("OFA_CONCURRENCY", 2),
+        # 8 req/s pour le rattrapage historique, 1 req/s pour l'incrémental quotidien
+        # (OFA_RATE=1) : voir docs/adr/0006-debit.md. Il faut ~4 requêtes en vol pour
+        # tenir 8 req/s avec une latence de 0,4 s par record.
+        rate=_env_float("OFA_RATE", 8.0),
+        concurrency=_env_int("OFA_CONCURRENCY", 4),
         contact=contact_from_environment(root),
         timeout=_env_float("OFA_TIMEOUT", 120.0),
         max_consecutive_errors=_env_int("OFA_MAX_CONSECUTIVE_ERRORS", 3),

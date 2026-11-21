@@ -9,6 +9,7 @@ Garanties :
 """
 
 import json
+import sys
 import threading
 import time
 from collections.abc import Callable
@@ -59,6 +60,18 @@ class RateLimiter:
         self._lock = threading.Lock()
         self._next_at = now()
 
+    def slow_down(self, factor: float = 2.0, floor_rate: float = 1.0) -> float:
+        """Ralentit DEFINITIVEMENT pour le reste de l'execution. Retourne le nouveau debit.
+
+        Appele sur 429 et 403, c'est-a-dire quand l'API nous dit d'arreter d'insister.
+        Un 5xx ou une coupure reseau ne sont pas des signaux de debit : ils ne ralentissent
+        pas. Le ralentissement n'est jamais annule : on ne remonte pas pour re-tester la
+        limite, ce serait exactement la sonde que la spec interdit.
+        """
+        with self._lock:
+            self._interval = min(1.0 / floor_rate, self._interval * factor)
+            return 1.0 / self._interval
+
     def acquire(self) -> None:
         with self._lock:
             now = self._now()
@@ -95,6 +108,7 @@ class Client:
         self._lock = threading.Lock()
         self._consecutive_errors = 0
         self.requests_made = 0
+        self.slowdowns = 0
         self._log_path = cfg.log_dir / "requests.jsonl"
         self._log_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -150,6 +164,15 @@ class Client:
                 with self._lock:
                     self._consecutive_errors = 0
                 return resp
+            if resp.status in (429, 403):
+                nouveau = self._limiter.slow_down()
+                self.slowdowns += 1
+                print(
+                    f"ATTENTION: HTTP {resp.status} -> debit ramene a {nouveau:.2f} req/s "
+                    "pour le reste de l'execution",
+                    file=sys.stderr,
+                    flush=True,
+                )
             with self._lock:
                 self._consecutive_errors += 1
                 too_many = self._consecutive_errors >= self.cfg.max_consecutive_errors

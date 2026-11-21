@@ -126,3 +126,35 @@ def test_rate_report_tolere_la_gigue_de_lordonnanceur(tmp_path):
     assert r["min_interval"] < 0.25  # l'intervalle minimum accuse a tort
     assert r["max_in_window"] == 5  # la fenetre glissante aussi
     assert r["max_advance"] <= 1.0  # l'avance, non : c'est elle qui compte
+
+
+def test_un_429_ralentit_definitivement(cfg, clock):
+    """Sur 429, on ralentit et on ne remonte jamais : re-tester la limite est interdit."""
+    client, _ = _client(cfg, clock, [(429, {}, b""), (200, {}, b"{}")])
+    avant = client._limiter._interval
+    client.get("/games?x=1")
+    assert client._limiter._interval == pytest.approx(avant * 2)
+    assert client.slowdowns == 1
+
+
+def test_un_403_ralentit_aussi(cfg, clock):
+    client, _ = _client(cfg, clock, [(403, {}, b""), (200, {}, b"{}")])
+    avant = client._limiter._interval
+    client.get("/games?x=1")
+    assert client._limiter._interval == pytest.approx(avant * 2)
+
+
+def test_un_5xx_ne_ralentit_pas(cfg, clock):
+    """Une panne serveur n'est pas un signal de debit."""
+    client, _ = _client(cfg, clock, [(503, {}, b""), (200, {}, b"{}")])
+    avant = client._limiter._interval
+    client.get("/games?x=1")
+    assert client._limiter._interval == avant
+    assert client.slowdowns == 0
+
+
+def test_le_ralentissement_a_un_plancher(cfg, clock):
+    limiter = RateLimiter(8.0, now=clock.now, sleep=clock.sleep)
+    for _ in range(10):
+        limiter.slow_down()
+    assert limiter._interval == pytest.approx(1.0)  # jamais plus lent que 1 req/s

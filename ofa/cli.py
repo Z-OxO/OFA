@@ -94,13 +94,14 @@ def cmd_rate_check(args) -> int:
     """
     cfg = config.load()
     path = Path(args.log or cfg.log_dir / "requests.jsonl")
-    r = rate_report(path, cfg.rate)
+    rate = args.rate or cfg.rate
+    r = rate_report(path, rate)
     print(f"requetes journalisees    : {r['requests']}")
     if r["min_interval"] is None:
         print("pas assez de requetes pour conclure")
         return 0
     print(f"avance max sur l'echeancier: {r['max_advance']:+.3f} requete  (doit rester <= 1)")
-    print(f"debit moyen              : {r['mean_rate']:.2f} req/s  (configure {cfg.rate})")
+    print(f"debit moyen              : {r['mean_rate']:.2f} req/s  (reference {rate})")
     print(f"intervalle minimum       : {r['min_interval']:.4f} s  (indicatif, gigue de l'OS)")
     print(f"max sur 1 s              : {r['max_in_window']}  (indicatif)")
     ok = r["max_advance"] <= 1.0
@@ -135,6 +136,12 @@ def main(argv: list[str] | None = None) -> int:
 
     p = sub.add_parser("rate-check", help="verifie le debit dans le journal des requetes")
     p.add_argument("--log", default=None)
+    p.add_argument(
+        "--rate",
+        type=float,
+        default=None,
+        help="debit de reference (defaut : OFA_RATE), utile pour verifier un vieux journal",
+    )
     p.set_defaults(func=cmd_rate_check)
 
     args = parser.parse_args(argv)
