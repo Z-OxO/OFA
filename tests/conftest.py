@@ -62,6 +62,16 @@ def fixture_ids() -> list[str]:
     return sorted(p.name.removesuffix(".json.zst") for p in FIXTURE_DIR.glob("*/*.json.zst"))
 
 
+@pytest.fixture(autouse=True)
+def fixtures_presentes():
+    """Les vrais records ne sont pas dans git (ils portent de vrais pseudonymes).
+
+    Sur un clone neuf, `uv run ofa fixtures` les retelecharge depuis l'API.
+    """
+    if not fixture_ids():
+        pytest.skip("fixtures absentes : lance `uv run ofa fixtures`")
+
+
 def fake_archive(game_ids: list[str] | None = None) -> tuple[list[dict], dict[str, bytes]]:
     """Construit (lignes de liste, records) depuis les vraies fixtures, triées par date."""
     ids = game_ids or fixture_ids()
