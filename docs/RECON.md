@@ -408,9 +408,11 @@ Le périmètre est arrêté : **FFA et Team classiques + ranked 2v2**, en exclua
 `publicGameType: "special"` et `playerTeams: "Humans Vs Nations"` — soit environ **6 800 parties/jour**
 (8 388 moins ~18 %), et de l'ordre de **3,6 M parties** pour les 535 jours d'archive.
 
-Deux scénarios chiffrés, selon le disque :
+**Décision : disque maintenu à 100 Go → scénario B** (voir `adr/0004-ingestion-deux-etages.md`).
 
-**A — disque ≥ 400 Go (recommandé) : records complets pour tout le périmètre.**
+Les deux scénarios chiffrés :
+
+**A — disque ≥ 400 Go : records complets pour tout le périmètre.** *(écarté : disque insuffisant)*
 
 | poste | volume |
 |---|---|
@@ -425,7 +427,7 @@ lettre), et **n'importe quelle partie peut être re-simulée plus tard sans reto
 ce qui compte, parce que changer ce qu'on extrait au J3 impose de tout rejouer (7 à 14 jours), mais
 jamais de tout retélécharger.
 
-**B — disque 100 Go : ingestion en deux étages.**
+**B — disque 100 Go : ingestion en deux étages.** *(RETENU)*
 
 | poste | volume |
 |---|---|

@@ -4,7 +4,7 @@ Spec : [docs/SPEC.md](SPEC.md). Décisions : [docs/adr/](adr/). Perf : [docs/PER
 
 | Jalon | État | Date |
 | --- | --- | --- |
-| J0 Reconnaissance et mesures | **livré** — critère d'acceptation atteint ; 2 arbitrages en attente | 2026-11-21 |
+| J0 Reconnaissance et mesures | **terminé** — critère d'acceptation atteint, arbitrages tranchés | 2026-11-21 |
 | J1 Ingestion | à faire | |
 | J2 Normalisation | à faire | |
 | J3 Re-simulation | à faire | |
@@ -69,6 +69,8 @@ bloqué** par Cloudflare (HTTP 200 depuis un script).
   **liens durs** + maps par tree-sha. **Pas de bundle** (mesuré inutile).
 - **ADR-0002** : le runner part de `tests/replay/ReplayGame.ts`, qui compare déjà les hashs.
 - **ADR-0003** : définition du critère de validité d'une re-sim, avec les trois champs jamais archivés.
+- **ADR-0004** : ingestion en deux étages (`data/raw/meta/` pour tout, `data/raw/full/` à la demande),
+  imposée par les 100 Go de disque ; coût assumé : +2,8 % de requêtes.
 
 ### Arbitrages
 
@@ -77,9 +79,9 @@ bloqué** par Cloudflare (HTTP 200 depuis un script).
   Soit ~6 800 parties/jour, ~3,6 M sur les 535 jours d'archive.
 - **Débit : 2 req/s** avec 2 requêtes en parallèle (380 requêtes à 1 req/s sans aucun 429/403 ;
   la doc décrit elle-même le parcours complet de l'archive). Jamais de recherche de la limite.
-- **Volume : en attente de ta décision sur le disque.** Scénario A (≥ 400 Go) = records complets
-  pour tout, ~225 Go, aucune partie téléchargée deux fois. Scénario B (100 Go) = deux étages,
-  ~61 Go. Détail chiffré dans RECON § 10.3.
+- **Volume : arrêté.** Disque maintenu à 100 Go → **ingestion en deux étages** (ADR-0004) :
+  `?turns=false` pour tout le périmètre (~3,6 M parties, 19 Go) et record complet pour les
+  ~100 k parties re-simulées (4 Go). Total projeté ~61 Go, soit ~39 Go de marge.
 
 ### Compression : exploré, rien à gagner
 
