@@ -108,8 +108,9 @@ class FakeClient:
         self.records = records
         self.fail = fail or {}
         self.calls: list[str] = []
-        self.crash_after_details: int | None = None
-        self._details = 0
+        # Plante sur CETTE partie : deterministe meme avec plusieurs requetes en vol,
+        # contrairement a un compteur d'appels.
+        self.crash_on_game: str | None = None
 
     @property
     def detail_calls(self) -> list[str]:
@@ -144,8 +145,7 @@ class FakeClient:
             return Response(200, headers, json.dumps(page).encode())
         if path.startswith("/game/"):
             game_id = path.removeprefix("/game/").split("?", 1)[0]
-            self._details += 1
-            if self.crash_after_details is not None and self._details > self.crash_after_details:
+            if game_id == self.crash_on_game:
                 raise KeyboardInterrupt("kill -9 simule au milieu d'une page")
             if game_id in self.fail:
                 return Response(self.fail[game_id], {}, b"{}")

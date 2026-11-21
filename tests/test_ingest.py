@@ -49,22 +49,27 @@ def test_une_relance_ne_fait_aucune_requete_de_detail(cfg):
 
 
 def test_kill_au_milieu_puis_reprise_sans_trou_ni_doublon(cfg):
-    """Critère d'acceptation : un kill -9 en plein milieu, puis une reprise."""
+    """Critère d'acceptation : un kill -9 en plein milieu, puis une reprise.
+
+    Le crash cible une partie nommée, pas un numéro d'appel : c'est déterministe même
+    avec plusieurs requêtes en vol, donc le test vaut aussi pour le chemin parallèle.
+    """
     rows, records = fake_archive()
     conn = index.connect(cfg.index_db)
     attendues = _perimetre(rows)
+    victime = attendues[5]
 
-    # Mort brutale après 5 téléchargements, au milieu d'une page de 10.
     crashed = FakeClient(rows, records)
-    crashed.crash_after_details = 5
+    crashed.crash_on_game = victime
     with contextlib.suppress(KeyboardInterrupt):
         ingest.ingest(cfg, crashed, conn, "unranked", limit=10, archive_start=START)
-    ecrits_avant = set(raw.iter_game_ids(cfg.raw_meta))
-    assert len(ecrits_avant) == 5
-    # Le curseur n'a pas avancé : la page n'était pas finie.
-    assert ingest.load_cursor(cfg, "unranked") == 0
 
-    # Reprise.
+    ecrits_avant = set(raw.iter_game_ids(cfg.raw_meta))
+    assert victime not in ecrits_avant  # la partie fautive n'est pas sur disque
+    assert ecrits_avant  # mais le travail d'avant est conserve
+    assert ingest.load_cursor(cfg, "unranked") == 0  # page inachevee : curseur immobile
+    assert list(cfg.raw_meta.glob("**/*.tmp*")) == []
+
     resumed = FakeClient(rows, records)
     ingest.ingest(cfg, resumed, conn, "unranked", limit=10, archive_start=START)
 
@@ -73,12 +78,36 @@ def test_kill_au_milieu_puis_reprise_sans_trou_ni_doublon(cfg):
     assert len(apres) == len(set(apres))  # aucune donnee dupliquee
     assert list(cfg.raw_meta.glob("**/*.tmp*")) == []
 
-    # Cout exact de la reprise : la requete interrompue est perdue, donc refaite.
-    # Une seule, parce que le crash tombe pendant le 6e telechargement alors que
-    # 5 etaient deja sur disque. Rien d'autre n'est re-telecharge.
+    # Chaque partie a ete demandee au moins une fois, et le surcout de la reprise est
+    # borne par ce qui etait en vol au moment du crash.
     total = crashed.detail_calls + resumed.detail_calls
     assert set(total) == {f"/game/{g}?turns=false" for g in attendues}
-    assert len(total) - len(set(total)) == 1
+    assert len(total) - len(set(total)) <= cfg.concurrency + 1
+
+
+def test_le_parallelisme_ecrit_exactement_les_memes_parties(cfg):
+    """Deux requetes en vol ne doivent rien changer au resultat, seulement au debit."""
+    from dataclasses import replace
+
+    rows, records = fake_archive()
+    attendues = sorted(_perimetre(rows))
+
+    sequentiel = replace(cfg, concurrency=1, data_dir=cfg.data_dir / "seq")
+    conn1 = index.connect(sequentiel.index_db)
+    s1 = ingest.ingest(
+        sequentiel, FakeClient(rows, records), conn1, "unranked", limit=7, archive_start=START
+    )
+
+    parallele = replace(cfg, concurrency=2, data_dir=cfg.data_dir / "par")
+    conn2 = index.connect(parallele.index_db)
+    s2 = ingest.ingest(
+        parallele, FakeClient(rows, records), conn2, "unranked", limit=7, archive_start=START
+    )
+
+    assert sorted(raw.iter_game_ids(sequentiel.raw_meta)) == attendues
+    assert sorted(raw.iter_game_ids(parallele.raw_meta)) == attendues
+    assert s1.written == s2.written == len(attendues)
+    assert s1.bytes_written == s2.bytes_written
 
 
 def test_la_marge_de_relecture_est_appliquee_a_la_reprise(cfg):

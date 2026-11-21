@@ -14,6 +14,7 @@ Sûreté à la reprise (critère d'acceptation du J1) :
 import json
 import os
 import sqlite3
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 
@@ -42,19 +43,23 @@ class Stats:
         return d
 
 
-def _fetch_one(cfg, client, conn, row, stats, failed, archive_start) -> None:
-    """Telecharge et stocke une partie, sauf si elle est hors periode, deja la, ou en echec."""
-    game_id = row["game"]
+def _a_telecharger(cfg, row, stats, failed, archive_start) -> bool:
+    """Trie une ligne de liste : hors periode, deja la, ou en echec definitif -> on passe."""
     if row["start"][:10] < archive_start:
         stats.skipped_before_start += 1
-        return
-    if raw.exists(cfg.raw_meta, game_id):
+        return False
+    if raw.exists(cfg.raw_meta, row["game"]):
         stats.skipped_present += 1
-        return
-    if game_id in failed:
+        return False
+    if row["game"] in failed:
         stats.skipped_failed += 1
-        return
-    resp = api.get_game(client, game_id, turns=False)
+        return False
+    return True
+
+
+def _stocker(cfg, conn, game_id, resp, stats, failed) -> None:
+    """Ecrit le record et l'index. Toujours sur le thread principal : sqlite n'est pas
+    thread-safe, et de toute facon seul le reseau gagne a etre parallelise."""
     if resp.status != 200:
         stats.errors[resp.status] = stats.errors.get(resp.status, 0) + 1
         index.mark_failed(conn, game_id, resp.status, datetime.now(UTC).isoformat())
@@ -64,6 +69,27 @@ def _fetch_one(cfg, client, conn, row, stats, failed, archive_start) -> None:
     stats.written += 1
     players = resp.json().get("info", {}).get("players", [])
     index.add_participants(conn, game_id, [p.get("publicID") for p in players])
+
+
+def _fetch_page(cfg, client, conn, rows, stats, failed, archive_start, workers: int) -> None:
+    """Telecharge les details d'une page, en parallele si workers > 1.
+
+    Mesure du J1 : en sequentiel, le temps de reponse (~0,07 s) s'ajoute a l'espacement
+    du limiteur (0,25 s a 4 req/s), d'ou un debit effectif de 3,11 req/s au lieu de 4.
+    Paralleliser les requetes laisse le limiteur imposer seul la cadence.
+    """
+    cibles = [r["game"] for r in rows if _a_telecharger(cfg, r, stats, failed, archive_start)]
+    if not cibles:
+        return
+    if workers <= 1:
+        for game_id in cibles:
+            _stocker(cfg, conn, game_id, api.get_game(client, game_id, turns=False), stats, failed)
+        return
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        reponses = pool.map(lambda g: api.get_game(client, g, turns=False), cibles)
+        # pool.map preserve l'ordre : on ecrit dans l'ordre de la page.
+        for game_id, resp in zip(cibles, reponses, strict=True):
+            _stocker(cfg, conn, game_id, resp, stats, failed)
 
 
 def cursor_path(cfg: Config, ranked_type: str):
@@ -106,8 +132,7 @@ def ingest(
             break
         stats.pages += 1
         stats.listed += len(rows)
-        for row in rows:
-            _fetch_one(cfg, client, conn, row, stats, failed, archive_start)
+        _fetch_page(cfg, client, conn, rows, stats, failed, archive_start, cfg.concurrency)
         conn.commit()
         # `id` est une chaîne décimale : comparer en entier, jamais en lexicographique.
         after = max(int(r["id"]) for r in rows)
@@ -154,8 +179,9 @@ def ingest_day(
         stats.listed += len(rows)
         if total is not None:
             stats.total_annonce = total
-        for row in rows:
-            _fetch_one(cfg, client, conn, row, stats, index.failed_ids(conn), archive_start)
+        _fetch_page(
+            cfg, client, conn, rows, stats, index.failed_ids(conn), archive_start, cfg.concurrency
+        )
         conn.commit()
         last = rows[-1]
         after = f"{last['start']},{last['game']}"
