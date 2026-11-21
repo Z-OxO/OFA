@@ -169,3 +169,27 @@ def test_mode_fenetre_ne_marque_pas_une_journee_encore_ouverte(cfg):
     )
     # Des parties peuvent encore être archivées en retard : on ne ferme pas la journée.
     assert not ingest.day_marker(cfg, "unranked", aujourdhui).exists()
+
+
+def test_demarrage_refuse_si_un_chemin_est_pris_par_un_fichier(cfg):
+    """Un fichier vide a la place de data/raw doit arreter ofa immediatement.
+
+    Vecu pendant le J1 : le sandbox avait materialise data/raw en fichier vide.
+    Sans ce garde-fou, l'ingestion de 7 jours mourait apres plusieurs heures.
+    """
+    import pytest
+
+    from ofa.cli import prepare
+
+    (cfg.data_dir / "raw").write_text("")  # ce qu'on a reellement trouve sur le disque
+    with pytest.raises(SystemExit) as erreur:
+        prepare(cfg)
+    assert "n'est pas un repertoire" in str(erreur.value)
+
+
+def test_demarrage_cree_les_repertoires_manquants(cfg):
+    from ofa.cli import prepare
+
+    prepare(cfg)
+    for chemin in (cfg.raw_meta, cfg.raw_full, cfg.state_dir, cfg.log_dir):
+        assert chemin.is_dir()

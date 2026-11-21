@@ -9,7 +9,24 @@ from . import config, fixtures, index, ingest, purge
 from .client import CircuitOpen, Client, rate_report
 
 
+def prepare(cfg) -> None:
+    """Cree les repertoires et echoue TOT si un chemin est pris par un fichier.
+
+    Vecu : le sandbox avait laisse un fichier vide a la place de data/raw, et un travail
+    de 4 heures serait mort en cours de route. Mieux vaut refuser de demarrer.
+    """
+    for path in (cfg.raw_meta, cfg.raw_full, cfg.state_dir, cfg.log_dir):
+        bloquant = next((p for p in [path, *path.parents] if p.exists() and not p.is_dir()), None)
+        if bloquant is not None:
+            raise SystemExit(
+                f"{bloquant} existe et n'est pas un repertoire : ofa ne peut pas ecrire dedans.\n"
+                f"Supprime ce fichier, ou pointe OFA_DATA_DIR ailleurs."
+            )
+        path.mkdir(parents=True, exist_ok=True)
+
+
 def _client_and_index(cfg):
+    prepare(cfg)
     return Client(cfg), index.connect(cfg.index_db)
 
 
