@@ -5,7 +5,7 @@ import json
 import sys
 from pathlib import Path
 
-from . import config, fixtures, index, ingest, normalize, purge
+from . import config, engine, fixtures, index, ingest, normalize, purge, resim
 from .client import CircuitOpen, Client, rate_report
 
 
@@ -138,6 +138,85 @@ def cmd_rate_check(args) -> int:
     return 0 if ok else 1
 
 
+def cmd_engines(args) -> int:
+    """Prepare un moteur par commit de la selection (ADR-0001), et chiffre ce que ca coute.
+
+    Grouper par commit n'est pas un arbitrage, c'est la preparation : 6 worktrees au lieu de
+    514. Ce qui s'arbitre, c'est la traine (ADR-0008).
+    """
+    cfg = config.load()
+    selected = resim.candidates(cfg.data_dir / "parquet")
+    if args.commit:
+        selected = [g for g in selected if g["git_commit"] == args.commit]
+    report = resim.engines_report(cfg, selected)
+    for row in report["commits"]:
+        print(
+            f"{row['commit']}  {row['games']:>5} parties  "
+            f"present={row['exists']}  pret={row['ready']}  "
+            f"lockfile={row.get('lockfile', '?')} en_cache={row.get('lockfile_cached')}  "
+            f"{row.get('mb') or 0} Mo"
+        )
+    if args.dry_run:
+        return 0
+    needed: list[str] = []
+    for sha in report["to_prepare"]:
+        try:
+            wt = engine.prepare(cfg.data_dir, sha)
+        except engine.NeedsShell as exc:
+            print(f"{sha[:8]} : {exc}", file=sys.stderr)
+            needed += exc.commands
+            continue
+        note = engine.node_version_note(cfg.data_dir, sha)
+        print(f"{sha[:8]} pret dans {wt}" + (f"  ATTENTION {note}" if note else ""))
+    if needed:
+        print(
+            "\nLe sandbox refuse ces commandes (.git en lecture seule). A lancer toi-meme :",
+            file=sys.stderr,
+        )
+        for c in dict.fromkeys(needed):
+            print(f"  ! {c}", file=sys.stderr)
+        return 2
+    return 0
+
+
+def cmd_resim(args) -> int:
+    """Rejoue les parties selectionnees et ecrit les trois tables de data/resim/."""
+    cfg = config.load()
+    if args.report:
+        conn = index.connect(cfg.index_db)
+        try:
+            rows = index.resim_counts(conn)
+        finally:
+            conn.close()
+        total = sum(r[1] for r in rows)
+        if not total:
+            print("aucune re-sim journalisee : lance `uv run ofa resim`")
+            return 0
+        ok = next((r for r in rows if r[0] == "ok"), None)
+        for status, n, ticks, wall, rss in rows:
+            debit = f"{ticks / wall:.0f} ticks/s" if wall else "-"
+            print(
+                f"{status:<24} {n:>5}  ({n / total:>6.1%})  {ticks:>10} ticks  "
+                f"{wall / 3600:>6.2f} h  {debit}  pic {rss // 1024} Mo"
+            )
+        if ok is not None and ok[3]:
+            # Un worker rejoue 3600 / (wall / parties) parties par heure.
+            print(f"\nvalides : {ok[1]}/{total} = {ok[1] / total:.2%}")
+            print(f"debit : {3600 / (ok[3] / ok[1]):.1f} parties/h/coeur")
+        return 0
+    report = resim.resim(
+        cfg,
+        limit=args.limit,
+        commit=args.commit,
+        games=args.game or None,
+        workers=args.workers,
+        batch=args.batch,
+        dry_run=args.dry_run,
+    )
+    print(json.dumps(report, ensure_ascii=False))
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="ofa", description="OpenFront Analyzer")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -172,6 +251,21 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--sample", type=int, required=True, help="nombre de parties visees")
     p.add_argument("--seed", type=int, default=20261121, help="graine du tirage (reproductible)")
     p.set_defaults(func=cmd_fetch_full)
+
+    p = sub.add_parser("engines", help="prepare un moteur par commit (worktree + node_modules)")
+    p.add_argument("--commit", default=None, help="ne prepare que ce commit")
+    p.add_argument("--dry-run", action="store_true", help="affiche le cout, ne prepare rien")
+    p.set_defaults(func=cmd_engines)
+
+    p = sub.add_parser("resim", help="rejoue les parties et ecrit data/resim/")
+    p.add_argument("--limit", type=int, default=None, help="s'arrete apres N parties")
+    p.add_argument("--commit", default=None, help="ne rejoue que les parties de ce commit")
+    p.add_argument("--game", nargs="*", default=None, help="gameID precis")
+    p.add_argument("--workers", type=int, default=None, help="defaut : min(coeurs, Go libres)")
+    p.add_argument("--batch", type=int, default=8, help="parties par tache (defaut 8)")
+    p.add_argument("--dry-run", action="store_true", help="affiche la selection, ne rejoue rien")
+    p.add_argument("--report", action="store_true", help="relit le journal et sort l'acceptation")
+    p.set_defaults(func=cmd_resim)
 
     p = sub.add_parser("rate-check", help="verifie le debit dans le journal des requetes")
     p.add_argument("--log", default=None)

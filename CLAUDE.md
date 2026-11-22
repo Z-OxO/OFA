@@ -6,13 +6,20 @@ Spec : docs/SPEC.md (lis seulement la section du jalon en cours). Avancement : d
 - `uv sync` : dépendances
 - `uv run pytest -q -m "not slow and not network"` : tests rapides ; `-m slow` = re-sim de vraies parties
 - `uv run ruff check . && uv run ruff format .`
-- `uv run ofa --help` : CLI (fixtures, ingest, purge-deleted, normalize, resim, rate, analyze, me, serve)
-- `cd resim && npm ci && npx tsc --noEmit`
+- `uv run ofa --help` : CLI (fixtures, ingest, purge-deleted, normalize, fetch-full, rate-check,
+  engines, resim, analyze, me, serve)
+- type-check du runner : il n'a de sens que DANS un worktree (ses imports `@openfront/*` y
+  resolvent). `resim/` ne porte donc pas de package.json :
+  `cd data/engines/<sha> && ./node_modules/.bin/tsc --noEmit -p tsconfig.json`, et on ne lit que
+  les lignes qui mentionnent `ofa_runner` (les 17 autres viennent du sparse-checkout).
+- `uv run ofa resim --report` : le tableau d'acceptation du J3, par cause
 - `duckdb -c "select count(*) from 'data/parquet/games/**/*.parquet'"` : requêtes ponctuelles
 
 ## Architecture (ne change pas sans ADR)
 - data/raw/ ne se modifie jamais (records zstd tels que reçus) ; tout le reste se reconstruit à partir de lui.
-- Parquet = source de vérité ; le site le lit en lecture seule.
+- Parquet = source de vérité ; le site le lit en lecture seule. data/parquet/ (J2) se
+  reconstruit en entier ; data/resim/ (J3) est incrémental et ne doit JAMAIS vivre sous
+  data/parquet/, que `normalize` échange en bloc.
 - Tout appel à l'API OpenFront passe par ofa/client.py (débit limité). Aucun autre chemin.
 - TypeScript uniquement dans resim/. data/openfront/ = clone de référence, lecture seule.
 

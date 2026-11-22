@@ -1,7 +1,11 @@
-# DATA — les tables Parquet du J2
+# DATA — les tables Parquet
 
-Trois tables dérivées de `data/raw/`, **source de vérité** du projet : le J4, le J5 et le J6 ne
-lisent qu'elles.
+Deux familles, et le J4, le J5 et le J6 ne lisent qu'elles :
+
+- **`data/parquet/`** (J2) — `games`, `participants`, `intents` : dérivées de `data/raw/`,
+  reconstruites en entier à chaque `ofa normalize`. **Source de vérité** du projet.
+- **`data/resim/`** (J3) — `player_ticks`, `events`, `players` : produites par le **moteur**,
+  rejoué au commit du record. Incrémentales, et une partie n'y écrit que si sa re-sim est valide.
 
 ```bash
 uv run ofa normalize                       # reconstruit tout depuis data/raw/{full,meta}
@@ -213,16 +217,170 @@ ou une nation, et on ne peut pas dire lequel avant le J3.
 
 ---
 
-## Ce que ces tables ne disent pas
+# Les trois tables de re-simulation (J3) — `data/resim/`
 
-| manque | pourquoi | quand |
+Elles ne viennent pas de `data/raw/` mais du **moteur**, rejoué au commit exact du record
+(ADR-0001, ADR-0002). Une partie n'y écrit **que si sa re-sim est valide** au sens de l'ADR-0003 :
+tous les hashs concordent, le gagnant et toutes les stats du record sont identiques. Sinon elle est
+classée par cause dans `data/state/index.sqlite` et n'écrit rien — jamais de données partielles.
+
+```bash
+uv run ofa engines                  # un moteur par commit de la selection (hors sandbox)
+uv run ofa resim                    # rejoue, reprend ou elle s'est arretee
+uv run ofa resim --report           # le tableau d'acceptation, par cause
+duckdb -c "select count(*) from 'data/resim/player_ticks/**/*.parquet'"
+```
+
+| | lignes | taille | par ligne |
+| --- | --- | --- | --- |
+| `data/resim/player_ticks/month=YYYY-MM/part-*.parquet` | 10 518 824 | 86,7 Mo | 8,24 o |
+| `data/resim/events/month=YYYY-MM/part-*.parquet` | 17 452 122 | 77,9 Mo | 4,46 o |
+| `data/resim/players/month=YYYY-MM/part-*.parquet` | 188 166 | 3,4 Mo | 18,0 o |
+
+Mesuré le 2026-11-22 sur **513 parties** (les 514 `has_turns and stats_agreed and in_scope` de
+l'archive, moins une solo sans hash) : 322 Ko par partie, 20 500 lignes de trajectoire et
+34 000 événements chacune.
+
+**Racine séparée, et c'est voulu** : `ofa normalize` écrit `data/parquet.tmp/` puis **échange le
+répertoire entier**, donc tout ce qui vivrait sous `data/parquet/` serait détruit à la
+normalisation suivante. Les fichiers sont nommés `part-<horodatage>-<lot>.parquet` : la re-sim est
+**incrémentale** (des heures de calcul), contrairement à la normalisation.
+
+**Encodage** : Parquet v2.6, `DELTA_BINARY_PACKED` sur tous les entiers, dictionnaire sur les
+chaînes, zstd niveau 19. Mesuré sur 72 838 vraies lignes : **18,47 → 8,12 o par ligne** de
+`player_ticks` (−56 %) et 5,75 → 4,50 pour `events`. Les colonnes sont des séries croissantes par
+joueur (tick, or cumulé, troupes) : c'est l'écart entre deux valeurs successives qui se compresse,
+pas la valeur. Les lignes sont triées par `(small_id, tick)` avant écriture, pour la même raison.
+
+## `player_ticks` — 35 colonnes, une ligne par (partie, joueur, 10 ticks)
+
+**Les humains seulement.** Un bot ou une nation n'est pas un sujet d'analyse et les inclure
+doublerait le volume ; ils restent présents dans `events` et dans `players`.
+Lu sur l'objet `Player` du moteur, jamais sur `PlayerView` (RECON § 5). Un joueur cesse d'être
+échantillonné quand il meurt : la fin de sa série est sa mort, au multiple de 10 ticks près.
+
+| colonne | type | source moteur | note |
+| --- | --- | --- | --- |
+| `game_id` | str | | |
+| `small_id` | i32 | `smallID()` | la clé de jointure avec `events.a`/`b` et `players` ; `client_id` n'est que dans `players`, pour ne pas payer 20 o par ligne |
+| `tick` | i32 | `ticks()` | multiple de 10 ; `tick / 10` = secondes de jeu |
+| `tiles` | i32 | `numTilesOwned()` | |
+| `gold` | i64 | `gold()` | le trésor **courant**, pas cumulé |
+| `gold_earned` | i64 | `goldEarned()` | cumulé, toutes sources |
+| `gold_trade` / `gold_train` / `gold_piracy` | i64 | `tradeGold()`, `trainGold()`, `piracyGold()` | cumulés ; mêmes sémantiques que `GOLD_INDEX_TRADE`, `TRAIN_*`, `STEAL` |
+| `troops` | i64 | `troops()` | i64 et non i32 : `peak_troops` atteint 2 081 249 469 dans l'archive, à 3 % du débordement d'un i32 |
+| `allies` | i16 | `allies().length` | les paires sont dans `events`, pas ici |
+| `betrayals` | i16 | `betrayals()` | |
+| `traitor`, `disconnected`, `doomsday` | bool | `isTraitor()`, `isDisconnected()`, `inDoomsdayClock()` | |
+| `atk_out`, `atk_out_troops` | i16, i64 | `outgoingAttacks()` | nombre d'attaques en cours et total des troupes engagées |
+| `atk_in`, `atk_in_troops` | i16, i64 | `incomingAttacks()` | |
+| `u_city`, `u_defp`, `u_port`, `u_wshp`, `u_silo`, `u_saml`, `u_fact`, `u_trade`, `u_trans` | i32 | `unitCount(type)` | **possédées à cet instant**, pas construites : mêmes 9 clés que les colonnes `units_*` et `boats_*` de `participants`, pour que les deux se recoupent |
+| `month` | str | partition | mois de `start` de la partie |
+
+## `events` — 14 colonnes, une ligne par (partie, tick, événement)
+
+Au **tick exact**, pas tous les 10 ticks. Trois sources, par ordre de simplicité : les tableaux en
+clair de `GameUpdates` ; `unpackUnitUpdates()` pour les unités, parce que `GameRunner.sendUpdates`
+**vide** `updates[Unit]` après compactage (c'est ce que fait le client, `GameView.ts`) ; et un diff
+par tick sur les objets vivants pour les éliminations et les attaques.
+
+| `kind` | `a` | `b` | autres colonnes |
+| --- | --- | --- | --- |
+| `unit_built` / `unit_lost` / `unit_captured` | propriétaire | ancien propriétaire (capture) | `unit_type`, `unit_id`, `params.lv` |
+| `conquest` | conquérant | conquis | `gold` |
+| `elimination` | éliminé | | |
+| `attack_start` / `attack_end` | attaquant | cible (`0` = terre neutre) | `troops` |
+| `alliance_request` / `alliance_reply` | demandeur | destinataire | `flag` = acceptée |
+| `alliance_broken` | traître | trahi | |
+| `alliance_expired` | joueur 1 | joueur 2 | |
+| `alliance_extension` | joueur | | `params.ui` = id d'alliance |
+| `donate` | donneur | receveur | `amount`, `what` = `gold` \| `troops` |
+| `embargo` | joueur | visé | `what` = `start` \| `stop` |
+| `target` | joueur | visé | |
+| `bonus` | joueur | | `gold`, `troops` |
+| `spawn_phase_end` | | | |
+
+`a` et `b` sont des **`small_id`**, convertis depuis les `PlayerID` quand la source en donne : les
+updates d'alliance, de cible et d'embargo portent déjà des `smallID`, mais conquête, don et bonus
+portent des `PlayerID` (des chaînes). `params` garde en JSON tout champ non promu (ADR-0007).
+
+**Les trains et les obus sont exclus** : 2 464 événements sur 5 090 dans la première partie mesurée,
+aucune stat en face, aucun usage d'analyse. Les bombes et les missiles d'interception, eux, passent.
+
+**Un id d'unité n'est jamais réutilisé**, et c'est ce qui rend la table juste : la même unité peut
+apparaître deux fois dans un seul tick, inactive puis active. Un état qui l'oublierait compterait
+6 villes construites au lieu de 3 (mesuré sur `c15Lo6e7na`). Après correction, les
+`unit_built` recomptés par joueur sont **identiques aux stats archivées, 54 cellules sur 54**.
+
+## `players` — 12 colonnes, une ligne par (partie, joueur)
+
+Tous les joueurs, humains compris, **plus les nations et les bots**. C'est ici que vivent les
+quatre champs qui n'existent que par re-simulation.
+
+| colonne | type | note |
 | --- | --- | --- |
-| **l'équipe d'un joueur** en mode Team | `players[].team` n'est **jamais** archivé (0 sur 2 070 777). Il est calculé par `withRecordedTeams` → `humanTeams`, qui exige le nombre de nations par défaut de la map **au commit**. `team_index` n'est là que sur 0,2 % des lignes | J3 : `player.team()` se lit directement sur le moteur |
-| `spawnTile`, `killedBy`, `deathPosition` | déclarés par le moteur, **jamais archivés** (0 %). `deathPosition` est la mesure de résultat principale en FFA | J3, par re-simulation |
-| les **coordonnées** d'un `tile` | `x = tile % largeur`, et la largeur dépend de la map **et** du commit | J3 |
-| `intents` pour la plupart des parties | `data/raw/meta` est sans `turns` (ADR-0004) | au fil des `ofa fetch-full` et du J3 |
-| les **hashs** par tour | 31 % des tours en portent un ; c'est la preuve de validité d'une re-sim (ADR-0003), lue directement dans `data/raw/full` | J3 |
-| le **classement** d'une partie | `deathPosition` absent ; `killed_at` n'en est qu'un proxy (Spearman −0,81 / −0,96 sur 2 parties) | J3 |
+| `game_id`, `small_id` | str, i32 | |
+| `client_id` | str | `null` pour une nation ou un bot ; la jointure avec `participants` |
+| `player_type` | str | `HUMAN` \| `NATION` \| `BOT` |
+| `username` | str | |
+| `team` | str | **le manque du J2** : `players[].team` n'est jamais archivé, `player.team()` le donne |
+| `spawn_tile` | i64 | `TileRef` brut, jamais archivé (0 % sur 993 lignes) |
+| `killed_by` | str | `clientID` de l'éliminateur ; `null` si l'éliminateur est un bot ou une nation |
+| `death_position` | i32 | **le classement de fin de partie**, que `killed_at` n'approchait qu'imparfaitement (Spearman −0,81 / −0,96). `null` pour qui est encore vivant quand la partie se clôt |
+| `final_tiles`, `alive_at_end` | i32, bool | à l'instant du `Win` |
+| `month` | str | partition |
+
+**`death_position` se compte parmi les humains ET les nations**, pas parmi les humains seuls
+(`GameImpl.recordDeathPosition` : tous les joueurs vivants sauf les bots, plus un). Mesuré sur
+`c15Lo6e7na` : 12 humains, et des positions allant jusqu'à 15. Deux joueurs éliminés au même tick
+peuvent partager une position.
+
+## Ce que les tables de re-sim ne disent pas
+
+| manque | pourquoi |
+| --- | --- |
+| l'état entre deux multiples de 10 ticks | l'échantillonnage de la spec. Conséquence mesurée : `max(player_ticks.tiles)` est **inférieur ou égal** à `participants.tiles_peak`, jamais supérieur (238 102 contre 238 440 sur la plus grosse partie de `c15Lo6e7na`) |
+| la trajectoire des bots et des nations | humains seulement (volume) |
+| les trains, les obus, les niveaux d'unité après construction | exclus de `events` |
+| ce qui se passe après le premier `Win` | le runner s'arrête là, comme `WinnerReplay.ts` : c'est l'état que le serveur a archivé |
+| les coordonnées d'un `tile` | toujours des `TileRef` bruts : `x = tile % largeur`, et la largeur dépend de la map **et** du commit |
+| les parties dont la re-sim n'est pas valide | elles n'écrivent rien ; `uv run ofa resim --report` les liste par cause |
+
+## Vérifier soi-même (indépendamment du code de `ofa`)
+
+```bash
+# les unites construites, recomptees depuis les evenements, contre les stats du serveur
+duckdb -c "
+with ev as (select a small_id, unit_type, count(*) n
+            from 'data/resim/events/**/*.parquet' where kind='unit_built' group by 1,2),
+     pl as (select small_id, client_id from 'data/resim/players/**/*.parquet')
+select p.client_id, sum(case when ev.unit_type='City' then n end) depuis_les_evenements,
+       any_value(q.units_city_built) depuis_les_stats
+from ev join pl p using (small_id)
+     join 'data/parquet/participants/**/*.parquet' q using (client_id)
+where q.game_id='c15Lo6e7na' group by 1"
+
+# le pic de territoire echantillonne, contre le pic exact archive
+duckdb -c "
+select max(t.tiles) echantillonne, any_value(p.tiles_peak) exact
+from 'data/resim/player_ticks/**/*.parquet' t
+join 'data/resim/players/**/*.parquet' r using (game_id, small_id)
+join 'data/parquet/participants/**/*.parquet' p using (game_id, client_id)
+where t.game_id='c15Lo6e7na' group by t.small_id"
+```
+
+---
+
+## Ce que les tables du J2 ne disent pas (et où c'est comblé)
+
+| manque | pourquoi | où |
+| --- | --- | --- |
+| **l'équipe d'un joueur** en mode Team | `players[].team` n'est **jamais** archivé (0 sur 2 070 777). Il est calculé par `withRecordedTeams` → `humanTeams`, qui exige le nombre de nations par défaut de la map **au commit**. `team_index` n'est là que sur 0,2 % des lignes | **livré** : `resim/players.team` |
+| `spawnTile`, `killedBy`, `deathPosition` | déclarés par le moteur, **jamais archivés** (0 %). `deathPosition` est la mesure de résultat principale en FFA | **livré** : `resim/players.spawn_tile`, `.killed_by`, `.death_position` |
+| les **coordonnées** d'un `tile` | `x = tile % largeur`, et la largeur dépend de la map **et** du commit | toujours manquant : aucune table ne les porte |
+| `intents` pour la plupart des parties | `data/raw/meta` est sans `turns` (ADR-0004) | 520 parties aujourd'hui (`ofa fetch-full`) |
+| les **hashs** par tour | 31 % des tours en portent un ; preuve de validité d'une re-sim (ADR-0003), lue dans `data/raw/full` | comptés dans `index.sqlite` (`resim.hashes_compared` / `_matched`) |
+| le **classement** d'une partie | `deathPosition` absent ; `killed_at` n'en est qu'un proxy (Spearman −0,81 / −0,96 sur 2 parties) | **livré** : `resim/players.death_position` |
 
 ---
 

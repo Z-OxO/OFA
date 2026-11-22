@@ -7,7 +7,7 @@ Spec : [docs/SPEC.md](SPEC.md). Décisions : [docs/adr/](adr/). Perf : [docs/PER
 | J0 Reconnaissance et mesures | **terminé** | 2026-11-21 |
 | J1 Ingestion | **terminé** — les 5 critères atteints | 2026-11-21 |
 | J2 Normalisation | **terminé** | 2026-11-22 |
-| J3 Re-simulation | à faire | |
+| J3 Re-simulation | **terminé** — 513/514 parties valides (99,81 %) | 2026-11-22 |
 | J4 Niveau | à faire | |
 | J5 Moteur d'analyse | à faire | |
 | J6 Site web | à faire | |
@@ -348,7 +348,7 @@ Rappel : `tick / 10` = secondes de jeu, donc `mm:ss = tick//600 : (tick%600)//10
   de filtrer à la main. Les requêtes de `fetch-full` sont les seules `/game/<id>` **sans**
   `?turns=false`, ce qui suffit pour les isoler. À reprendre au J9, avec les timers.
 
-### Prochaine étape : J3, re-simulation à grande échelle
+### Prochaine étape : J3, re-simulation à grande échelle (fait, voir plus bas)
 
 ### Note du J1 : ce qui avait été anticipé pour le J2
 
@@ -370,3 +370,128 @@ Points connus à traiter, tous mesurés au J0 et au J1 :
 **Premier arbitrage du J2** : les records `meta` ne contiennent **pas** `turns`, donc la table
 `intents` ne pourra être remplie que pour les parties dont on aura le record complet (étage `full`,
 ADR-0004). Il faudra décider si le J2 livre `intents` sur un sous-ensemble, ou s'il attend le J3.
+
+---
+
+## J3 — Re-simulation à grande échelle (terminé)
+
+### Code
+
+| Module | Rôle |
+| --- | --- |
+| `resim/ofa_runner.ts` | le runner : copie de `tests/replay/ReplayGame.ts` (ADR-0002) + état par joueur toutes les 10 ticks + 16 types d'événements au tick exact + l'adaptateur de version d'interface |
+| `ofa/engine.py` | un moteur par commit (ADR-0001) : worktree sparse, `node_modules` par hash de lockfile en liens durs, map par tree-sha ; `NeedsShell` quand le sandbox refuse |
+| `ofa/resim.py` | sélection, pool de workers, critère de validité (ADR-0003), les 3 tables Parquet |
+| `ofa/index.py` | table `resim` : le statut par partie, mutable, qui porte la reprise et le décompte par cause |
+| `ofa/cli.py` | `ofa engines`, `ofa resim`, `ofa resim --report` |
+| `docs/adr/0008-moteurs-par-commit.md` | l'arbitrage des commits, chiffré |
+
+`uv run pytest -q -m "not slow and not network"` : **66 tests, 9,9 s** (52 des J1-J2 + 14 du J3).
+2 tests `slow`. `ruff check` propre. Type-check du runner dans un worktree : **0 erreur sur
+`ofa_runner.ts`** (les 17 que `tsc` rapporte sont préexistantes — le sparse-checkout exclut
+`resources/lang/`, du code client que le runner ne touche pas). Aucune dépendance ajoutée.
+
+### Critères d'acceptation : les 3 atteints
+
+| Critère | Preuve |
+| --- | --- |
+| ≥ 99 % de 500 parties `statsAgreed` avec des stats finales identiques au record | **513 / 514 = 99,81 %**. Sélection : toutes les parties `has_turns and stats_agreed and in_scope` de l'archive. 5 089 773 ticks rejoués, **1 307 hashs sur 1 307** concordants sur la plus grosse partie, et zéro écart de stats sur les 513 |
+| Les échecs sont listés par cause | `uv run ofa resim --report`. Un seul échec : `hash_absent`, **une partie solo** (1 joueur) dont le record ne porte **aucun** hash — aucun client indépendant n'a pu en valider un. Ses stats concordent pourtant **sans un seul écart** : c'est le point 1 de l'ADR-0003 qui est muet, pas la re-sim qui est fausse. Elle n'écrit donc rien, et c'est voulu |
+| Débit et pic mémoire dans `docs/PERF.md` | **168 ticks/s/cœur, 60,8 parties/h/cœur, 365 parties/h à 6 workers, pic RSS 925 Mo** |
+
+### Trois contre-épreuves indépendantes du code de `ofa`
+
+Comme au J2, le seul moyen de savoir si les tables décrivent bien la partie qui a eu lieu est de
+les recouper avec une source qui ne leur doit rien — ici, les stats que **le serveur de jeu** a
+archivées pendant la partie :
+
+1. **Les unités construites, recomptées depuis les événements** (une transition d'unité à la fois)
+   contre `participants.units_*_built` : **18 083 joueurs × 6 types = 108 498 comparaisons,
+   0 écart.**
+2. **Le pic de territoire échantillonné** contre `participants.tiles_peak`, le pic exact :
+   **19 038 comparaisons, 0 dépassement**, 9 179 égalités strictes, et 99,86 % du pic en moyenne —
+   exactement ce que l'échantillonnage à 10 ticks doit donner.
+3. **Zéro doublon** sur `(game_id, small_id, tick)` à travers 10,5 M de lignes.
+
+### Les deux manques du J2, comblés
+
+| | |
+| --- | --- |
+| `team` | rempli sur les **147 parties Team** (5 769 lignes humaines), nul sur les 366 FFA. `player.team()` le donne gratuitement, là où le J2 aurait dû réimplémenter `humanTeams` au commit |
+| `spawn_tile`, `killed_by`, `death_position` | 186 704 / 13 487 / 14 240 lignes. `death_position` est **le classement de fin de partie**, que `killed_at` n'approchait qu'imparfaitement (Spearman −0,81 / −0,96). Il se compte parmi les humains **et les nations** : 12 humains dans `c15Lo6e7na`, et des positions jusqu'à 15 |
+
+### Mesures
+
+| Mesure | Valeur |
+| --- | --- |
+| Run principal, 6 workers | 462 parties en **78,3 min** |
+| Relance après préparation des 3 moteurs manquants | 52 parties en **11,1 min** |
+| Pire cas : 170 joueurs, 13 071 ticks | 134,6 s, 713 Mo, 97 ticks/s |
+| Coût du relevé d'état (deux mesures sur ce pire cas) | 133,1 → 141,2 s, **+6,1 %** |
+| Sortie | **28,2 M de lignes, 161 Mo** pour 513 parties — **322 Ko par partie** |
+| `player_ticks` / `events` / `players` | 10 518 824 / 17 452 122 / 188 166 lignes |
+| Coût d'une ligne, avec l'encodage retenu | **8,24 o** / **4,46 o** / 18,0 o |
+| Coût d'un commit provisionné | **37 Mo** (6 worktrees sur 7 à 35-37 Mo) |
+
+### Décisions
+
+- **ADR-0008 : grouper par commit est la préparation, pas un arbitrage.** 6 worktrees au lieu de
+  514 préparations. Les 514 parties se répartissent 199 / 98 / 83 / 82 / 51 / **1**, et le commit à
+  une partie est le seul dont le `package-lock.json` diffère : 399 Mo au lieu de 48. Il a été
+  provisionné quand même — 0,04 % du disque libre, et le chemin « nouveau lockfile » de l'ADR-0001
+  s'en trouve exercé pour de vrai. La règle pour les 100 Go du serveur est écrite dans l'ADR
+  (~370 commits sur 435 jours, 17,8 Go : réviser le budget ou évincer), pas implémentée.
+- **Racine `data/resim/`, séparée de `data/parquet/`.** `normalize.rebuild()` échange le
+  répertoire entier ; tout ce qui vivrait sous `data/parquet/` disparaîtrait à la normalisation
+  suivante. La re-sim, elle, est **incrémentale** : des heures de calcul ne se jettent pas.
+- **Le statut par partie va en SQLite, pas en Parquet**, parce qu'il est **mutable** : c'est lui
+  qui porte la reprise (`--limit`, `--commit`, relance à blanc) et le décompte par cause. Une
+  partie n'écrit ses lignes **que** si elle est valide.
+- **`DELTA_BINARY_PACKED` sur les entiers, dictionnaire sur les chaînes, Parquet v2.6, zstd 19.**
+  Mesuré : 18,47 → 8,00 o par ligne de `player_ticks` (−57 %). Le J0 projetait 5,00 o en comptant
+  sur le tri seul ; le tri est nécessaire (il rend les séries monotones) mais ne suffit pas, parce
+  qu'un dictionnaire ne sert à rien sur une série croissante. Sans cette mesure, la sortie des
+  100 000 parties du J3 aurait pesé **68 Go au lieu de 32**.
+- **Les trajectoires ne portent que les humains.** Un bot ou une nation n'est pas un sujet
+  d'analyse, et les inclure multipliait le volume par 9 (188 166 lignes `players` pour 20 465
+  humains). Ils restent dans `events` et dans `players`.
+- **Trains et obus exclus des événements** : 2 464 sur 5 090 dans la première partie mesurée,
+  aucune stat en face, aucun usage d'analyse. Bombes et missiles d'interception conservés.
+- **Pas d'`--force`.** Rejouer une partie déjà valide dupliquerait ses lignes ; pour tout refaire,
+  on vide `data/resim/` et la table `resim`. C'est une limite assumée, pas un oubli : un
+  dédoublonnage à l'écriture serait du code mort tant que la re-sim est monotone.
+
+### Quatre pièges trouvés en route, tous par la mesure
+
+1. **6 villes construites au lieu de 3.** Une même unité peut apparaître **deux fois dans un seul
+   tick**, inactive puis active. Un état qui supprimait l'id à l'inactivité comptait la seconde
+   apparition comme une construction. Un id d'unité n'étant jamais réutilisé, la règle juste est :
+   une première apparition est une construction, un id déjà connu n'en est jamais une. Trouvé par
+   la contre-épreuve n° 1, pas par un test — et c'est précisément pour ça qu'elle existe.
+2. **`PackedUnitUpdates.ts` n'existe pas dans les commits anciens.** Un `import` statique faisait
+   planter le runner au chargement (`ERR_MODULE_NOT_FOUND`, commit `79aed26b`). D'où un
+   **adaptateur par version d'interface, pas par commit** (règle du projet) : import dynamique, et
+   tout accès à `gu.updates[...]` passe par un `each` qui tolère un `GameUpdateType` absent, parce
+   que l'enum est numérique implicite et que son indice dépend de l'ordre de déclaration **au
+   commit**.
+3. **Les ids des updates ne sont pas tous de la même nature.** Alliance, cible et embargo portent
+   des `smallID` (`requestorID: number`) ; conquête, don et bonus portent des `PlayerID` (des
+   chaînes). Tout convertir ou ne rien convertir donnait des événements silencieusement faux.
+4. **Un chemin relatif passé au worker** se résolvait dans le worktree (`cwd=<worktree>`), avec un
+   `ERR_MODULE_NOT_FOUND` au chemin doublé. `run_one` fait maintenant un `.resolve()`. Et
+   `install_runner` écrit par fichier temporaire + `os.replace` : six workers copient le même
+   runner au même endroit, et une lecture d'un fichier à moitié écrit était possible.
+
+### Ce qui reste ouvert pour la suite
+
+- Le worktree `dd85bcfb` fait **393 Mo au lieu de 37** : son sparse-checkout n'a pas été appliqué
+  au J0. Sans conséquence (il a rejoué ses 83 parties), 356 Mo à récupérer hors sandbox si besoin
+  (commande dans l'ADR-0008).
+- **`intents` et les trajectoires ne couvrent que 520 parties** sur 55 952 : c'est
+  `ofa fetch-full` qui décide du volume, pas la re-sim. Le J4 et le J5 travailleront donc sur deux
+  populations de tailles très différentes — les stats finales de 48 100 parties du périmètre, et
+  les trajectoires de 513.
+- `players.death_position` compte les nations : à retraiter si le J5 veut un classement
+  « entre humains ».
+- Projection de stockage à corriger dans `RECON.md` § 10.3 : **32 Go** pour 100 000 parties
+  re-simulées, et non 17,1 Go (total projeté ~86 Go sur 100).

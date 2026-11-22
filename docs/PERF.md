@@ -147,8 +147,70 @@ nuls : le zstd colonne par colonne les ramène à presque rien. Projection pour 
 pour les 100 000 parties du J3, à ajouter aux 26 Go de `data/raw/meta` et aux 4,3 Go de
 `data/raw/full` (budget : 100 Go).
 
+## Re-simulation à grande échelle (J3, mesures sur 514 vraies parties)
+
+Toutes les parties `has_turns and stats_agreed and in_scope` de l'archive courante, rejouées au
+commit exact, sur le portable (20 cœurs / 8 Go, **6 workers** : `min(cœurs, Go disponibles)`).
+
+| Mesure | Valeur |
+|---|---|
+| Parties valides (ADR-0003) | **513 / 514 = 99,81 %** |
+| Run principal | 462 parties en **78,3 min** |
+| Relance après préparation des 3 moteurs manquants | 52 parties en **11,1 min** |
+| Ticks simulés | **5 089 773** en **8,44 h** de CPU |
+| Débit par cœur | **168 ticks/s**, soit **60,8 parties/h** |
+| Débit à 6 workers | **365 parties/h** |
+| Pic RSS observé sur l'ensemble du run | **925 Mo** |
+| Pire cas isolé : 170 joueurs, 13 071 ticks | **134,6 s**, 713 Mo, 97 ticks/s |
+| Coût du relevé d'état, mesuré deux fois sur ce pire cas | 133,1 s → **141,2 s : +6,1 %** |
+| Surcoût de démarrage `node --import tsx` | ~1,4 s, inchangé → **toujours pas de bundle** (ADR-0001) |
+
+Les **168 ticks/s** confirment les 172 projetés au J0 sur 3 parties, relevé d'état inclus. La
+mémoire, elle, était sous-estimée : **compter 1 Go par worker, pas 0,8 Go** — 925 Mo observés sur
+une population dont la plus grosse partie compte 170 joueurs (le J0 n'était monté qu'à 95).
+
+| machine | workers | parties/h | 100 000 parties |
+|---|---|---|---|
+| local 20 c / 8 Go | **6** (limite mémoire) | 365 | **11,4 jours** |
+| serveur 8 c / 16 Go | **8** | 486 | **8,6 jours** |
+
+### Coût d'une ligne : l'encodage compte plus que le tri
+
+Le J0 projetait 5,00 o/ligne sur des séries synthétiques triées. Sur la vraie sortie, avec
+l'encodage Parquet par défaut (dictionnaire, v1), une ligne de `player_ticks` coûte **18,47 o** :
+ses colonnes sont des séries croissantes par joueur (tick, or cumulé, troupes), que le
+dictionnaire n'aide pas. Mesuré sur 72 838 vraies lignes :
+
+| Encodage | `player_ticks` | `events` |
+|---|---|---|
+| dictionnaire, Parquet v1, zstd | 18,47 o/ligne | 5,75 o/ligne |
+| sans dictionnaire, encodage par défaut v2.6 | 12,75 o/ligne | — |
+| **`DELTA_BINARY_PACKED` sur les entiers + dictionnaire sur les chaînes, v2.6** | **8,61 o/ligne** | **4,45 o/ligne** |
+| idem, zstd niveau 19 (retenu) | **8,00 o/ligne** | **4,45 o/ligne** |
+
+Le niveau 19 ne coûte rien ici (l'écriture est de l'ordre d'une seconde contre 134 s de
+simulation) et la décompression ne dépend pas du niveau. Le tri par `(small_id, tick)` est
+conservé : c'est lui qui rend les séries monotones, donc le delta petit.
+
+### Tailles réelles, sur les 513 parties valides
+
+| Table | Lignes | Taille | Par ligne | Par partie |
+|---|---|---|---|---|
+| `player_ticks` | **10 518 824** | **86,7 Mo** | **8,24 o** | 20 500 lignes |
+| `events` | **17 452 122** | **77,9 Mo** | **4,46 o** | 34 000 lignes |
+| `players` | 188 166 | 3,4 Mo | 18,0 o | 367 lignes (nations et bots compris) |
+| **Total** | 28,2 M | **161 Mo** | | **322 Ko** |
+
+**322 Ko par partie contre 179 Ko projetés au J0** : les trajectoires sont deux fois plus légères
+que prévu (20 500 lignes au lieu de 36 641, parce qu'on n'échantillonne que les humains), mais le
+J0 n'avait pas chiffré les événements, qui coûtent presque autant. Projection à revoir dans
+RECON § 10.3 : **32 Go pour 100 000 parties**, et non 17,1 Go. Sur le budget de 100 Go du serveur,
+cela reste tenable (total projeté ~86 Go), mais la marge passe de 29 à 14 Go.
+
 ## À remesurer plus tard
 
-- [ ] Les 5,00 o/ligne viennent de séries synthétiques réalistes : à confirmer sur la vraie sortie du J3.
-- [ ] Débit de re-sim avec N workers en parallèle (contention mémoire et cache).
+- [x] ~~Les 5,00 o/ligne viennent de séries synthétiques réalistes~~ → **8,24 o** pour
+  `player_ticks`, **4,46 o** pour `events`, mesurés sur 28,2 M de vraies lignes.
+- [x] ~~Débit de re-sim avec N workers en parallèle~~ → **365 parties/h à 6 workers**, pic 925 Mo.
 - [ ] Temps de lecture des Parquet par le site (cible : 95 % < 300 ms, J6).
+- [ ] Le même run sur le serveur (8 workers, 16 Go) : vérifier les 486 parties/h projetées.

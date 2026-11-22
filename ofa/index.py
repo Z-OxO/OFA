@@ -85,3 +85,61 @@ def mark_failed(conn: sqlite3.Connection, game_id: str, status: int, at: str) ->
 def failed_ids(conn: sqlite3.Connection) -> set[str]:
     conn.executescript(FAILED_SCHEMA)
     return {r[0] for r in conn.execute("SELECT game_id FROM failed")}
+
+
+# Le statut d'une re-sim est un etat MUTABLE : c'est lui qui permet la reprise d'un run de
+# plusieurs heures et qui produit le decompte par cause du J3. Il n'a donc pas sa place en
+# Parquet, et il se reconstruit en relancant la re-sim.
+RESIM_SCHEMA = """
+CREATE TABLE IF NOT EXISTS resim (
+  game_id         TEXT PRIMARY KEY,
+  status          TEXT NOT NULL,
+  detail          TEXT,
+  git_commit      TEXT,
+  month           TEXT,
+  ticks           INTEGER,
+  wall_s          REAL,
+  rss_kb          INTEGER,
+  hashes_compared INTEGER,
+  hashes_matched  INTEGER,
+  rows_written    INTEGER,
+  at              TEXT NOT NULL
+);
+"""
+
+
+def resim_done(conn: sqlite3.Connection) -> set[str]:
+    """Les parties deja valides : une reprise ne les rejoue pas (1 min par partie economisee)."""
+    conn.executescript(RESIM_SCHEMA)
+    return {r[0] for r in conn.execute("SELECT game_id FROM resim WHERE status = 'ok'")}
+
+
+def resim_record(conn: sqlite3.Connection, summary: dict) -> None:
+    conn.executescript(RESIM_SCHEMA)
+    conn.execute(
+        "INSERT OR REPLACE INTO resim (game_id, status, detail, git_commit, month, ticks, "
+        "wall_s, rss_kb, hashes_compared, hashes_matched, rows_written, at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))",
+        (
+            summary["game_id"],
+            summary["status"],
+            "\n".join(summary.get("detail") or [])[:2000] or None,
+            summary.get("git_commit"),
+            summary.get("month"),
+            summary.get("ticks"),
+            summary.get("wall_s"),
+            summary.get("rss_kb"),
+            summary.get("hashes_compared"),
+            summary.get("hashes_matched"),
+            summary.get("rows"),
+        ),
+    )
+
+
+def resim_counts(conn: sqlite3.Connection) -> list[tuple]:
+    """(statut, parties, ticks, secondes de mur, pic RSS) : la matiere de PERF.md."""
+    conn.executescript(RESIM_SCHEMA)
+    return conn.execute(
+        "SELECT status, count(*), coalesce(sum(ticks), 0), coalesce(sum(wall_s), 0), "
+        "coalesce(max(rss_kb), 0) FROM resim GROUP BY status ORDER BY count(*) DESC"
+    ).fetchall()
