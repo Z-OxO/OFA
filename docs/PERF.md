@@ -1,8 +1,9 @@
 # PERF — mesures de performance
 
 Règle : mesurer avant d'optimiser, et consigner ici avec la commande.
-Machines : **local** WSL2, 20 cœurs / **7 Go RAM** / 927 Go ; **serveur** Debian 12, 8 cœurs /
-**16 Go** / **100 Go SSD SATA**. Sur le local, la RAM plafonne avant les cœurs.
+Machines : **local** WSL2, 20 cœurs / **15,7 Go RAM** / 927 Go ; **serveur** Debian 12, 8 cœurs /
+**16 Go** / **100 Go SSD SATA**. Le local annonçait 7 Go jusqu'au J4b : c'était faux (`free -m`),
+et sur les deux machines ce sont **les cœurs** qui plafonnent avant la RAM.
 
 ## Préparation du moteur
 
@@ -269,6 +270,66 @@ moitié modèle.
 7,8 M de participations) projette **~5 Go**. Au-delà, découper par jour à l'intérieur de la
 partition mensuelle (`shortcut:` dans `ofa/rating.py`) ; le modèle n'a pas à changer.
 
+## J4b — Le nombre de workers : la saturation annoncée n'existe pas
+
+Protocole : 16 parties réelles (`docs/perf-sample.txt`), la même liste à chaque passe, rejouée
+entière par `scratch/bench_workers.py` dans un `OFA_DATA_DIR` jetable (liens vers les vraies
+données, journal remis à zéro avant chaque passe, `--batch 1`).
+
+**L'échantillon est choisi à coût MESURÉ voisin, pas à ticks égaux** : à 8 500 ticks, le coût réel
+du J3 va de **16 s à 241 s** selon la map et le nombre de joueurs. Un échantillon « stratifié sur
+les ticks » mesure surtout sa propre queue de fin de passe. Les 16 parties coûtaient 123 s chacune
+au J3, d'où des vagues pleines et 33 min de CPU par passe.
+
+| workers | mur | débit machine | débit par partie | occupation | RSS max |
+|---|---|---|---|---|---|
+| 1 | 46 s | 162 t/s | 171 t/s | 0,94 | 472 Mo |
+| 4 | 254 s | 612 t/s | 188 t/s | 0,81 | 605 Mo |
+| 6 | 209 s | 746 t/s | 171 t/s | 0,73 | 620 Mo |
+| 8 | 173 s | 900 t/s | 150 t/s | 0,75 | 607 Mo |
+| 12 | 163 s | 954 t/s | 144 t/s | 0,55 | 607 Mo |
+| 12 (refait) | 178 s | 876 t/s | 134 t/s | 0,54 | 620 Mo |
+| 16 | 135 s | **1 150 t/s** | 118 t/s | 0,61 | 624 Mo |
+| 20 | 134 s | 1 160 t/s | 120 t/s | 0,48 | 598 Mo |
+
+`uv run python scratch/bench_workers.py 1 4 6 8 12 16` (18 min de mur, les points 20 et 12-refait
+ajoutés après).
+
+**Conclusion : l'hypothèse du J3 est réfutée.** 12 workers ne saturent pas : ils battent 6 de
+17 à 28 % selon la passe, et 16 battent 12 de 20 %. La contention mémoire est bien là — le débit
+**par partie** perd 37 % de 4 à 16 workers — mais elle est plus lente que le gain de parallélisme.
+Le « 1 008 → 615 ticks/s » du J3 ne venait donc pas des workers : la géographie seule a payé,
+ce qui recoupe son ×2,58 déjà mesuré au-dessus. Deux variables dans un run, et c'est l'innocente
+qu'on accuse.
+
+**Ce que ça change dans le code : rien.** `workers_default()` rend déjà `min(cœurs, Go dispo)`,
+soit 14 en local et 8 sur le serveur — dans le plateau mesuré des deux côtés. La piste n'avait pas
+besoin d'une optimisation, elle avait besoin d'une mesure.
+
+Déterminisme, vérifié au passage : les 16 parties ont été rejouées **8 fois** à des concurrences
+différentes, 8 × 16 statuts `ok` (stats comparées au record), et les 307 788 lignes de
+`player_ticks` sont identiques à celles du J3, nombre de lignes comme sommes d'or et de troupes.
+La concurrence n'entame pas le déterminisme.
+
+| | |
+|---|---|
+| 20 000 parties ≈ 198 M de ticks | **848 h de CPU** au débit réel du J3 (65 t/s/cœur, mélange complet) |
+| sur les 8 cœurs du serveur | **~4,4 jours** de tâche de fond, sans personne devant |
+| budget écrit | ces 4,4 jours. Pas de ×3 à chercher. |
+
+Trois limites à connaître :
+- le point à **20 workers ne veut rien dire** : l'échantillon n'a que 16 parties, donc 4 workers
+  restent inoccupés et la passe est la même qu'à 16. Le plateau au-delà de 16 n'est pas mesuré ;
+- ces 16 parties sont de coût médian, **sans les géantes** (906 Mo de RSS) qui tournaient en
+  concurrence pendant le J3. Un mélange réel pèse plus lourd en mémoire, et à 16 workers on
+  monterait vers 14 Go sur les 15,7 du local. C'est pourquoi la borne RAM de `workers_default()`
+  reste la bonne garde-fou.
+- non expliqué : les mêmes parties coûtent **67 s** ici à 12 workers contre **123 s** au J3, à
+  concurrence égale. Candidats : les géantes en vol pendant le J3, et l'éviction (`--evict`,
+  `rm -rf` de worktrees et `npm ci` pendant que les workers tournent). Sans conséquence sur la
+  conclusion — l'écart est le même à tous les points — mais la projection ci-dessus garde les
+  65 t/s du run réel, pas les 134 du banc.
+
 ## À remesurer plus tard
 
 - [x] ~~Les 5,00 o/ligne viennent de séries synthétiques réalistes~~ → **8,24 o** pour
@@ -276,4 +337,6 @@ partition mensuelle (`shortcut:` dans `ofa/rating.py`) ; le modèle n'a pas à c
 - [x] ~~Débit de re-sim avec N workers en parallèle~~ → **365 parties/h à 6 workers**, pic 925 Mo.
 - [ ] Temps de lecture des Parquet par le site (cible : 95 % < 300 ms, J6).
 - [ ] Le même run sur le serveur (8 workers, 16 Go) : vérifier les 486 parties/h projetées.
+- [ ] La courbe de workers au-delà de 16, et sur un mélange qui contient les géantes : les deux
+      points que le banc du J4b ne couvre pas.
 - [ ] `ofa rating` sur un mois complet du serveur : vérifier les ~5 Go de pic projetés.

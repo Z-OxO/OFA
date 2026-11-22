@@ -9,7 +9,7 @@ Spec : [docs/SPEC.md](SPEC.md). Décisions : [docs/adr/](adr/). Perf : [docs/PER
 | J2 Normalisation | **terminé** | 2026-11-22 |
 | J3 Re-simulation | **terminé** — 513/514 (99,81 %), géographie comprise (ADR-0011) | 2026-11-22 |
 | J4 Niveau | **terminé** — log-loss 0,637 contre 0,693, Spearman 0,311 | 2026-11-22 |
-| J4b Optimisation mesurée | **à faire** — 20,6 h de CPU pour 489 parties, à diviser par 3 | |
+| J4b Nombre de workers | **terminé** — saturation réfutée, aucun changement conservé | 2026-11-22 |
 | J5 Moteur d'analyse | à faire | |
 | J6 Site web | à faire | |
 | J7 Mes parties | à faire | |
@@ -705,11 +705,66 @@ n'est **pas** démêlée. C'est la raison d'être du jalon **J4b**, et sa premi�
 
 ### Ce qui reste ouvert
 
-- **Le J4b doit passer avant la re-sim à grande échelle** : à 21,76 h pour 513 parties, les 20 000
-  parties visées coûteraient ~840 h de CPU.
+- ~~**Le J4b doit passer avant la re-sim à grande échelle**~~ → réglé par le J4b : les ~848 h de
+  CPU des 20 000 parties sont 4,4 jours de tâche de fond sur le serveur, et la saturation
+  soupçonnée n'existe pas. Rien ne bloque la re-sim à grande échelle.
 - Le worktree `dd85bcfb` a été reprovisionné pendant ce run et fait désormais **37 Mo au lieu de
   393** : le point laissé ouvert au J3 (« 356 Mo à récupérer ») est réglé.
 - `data/resim.j3-sans-geo/` (161 Mo) garde l'ancienne sortie, sans géographie. À supprimer quand
   les nouveaux chiffres auront servi.
 - Pas de forme de territoire au-delà de la boîte englobante du plus gros bloc, pas de trajectoire
   d'unité, pas d'historique tuile par tuile : écartés en connaissance de cause (ADR-0011).
+
+## J4b — Le nombre de workers (livré, en 25 min de mesure)
+
+Le jalon devait diviser par 3 un coût de 848 h de CPU. Première chose faite : regarder ce que ces
+848 h sont vraiment. Sur les 8 cœurs du serveur, **4,4 jours de tâche de fond**, sur une machine
+qui n'a rien d'autre à faire et devant laquelle personne n'attend. Le ×3 n'était rattaché à aucun
+besoin. Le jalon se réduit donc à sa seule piste gratuite — le nombre de workers — et se referme.
+
+**La mesure réfute l'hypothèse.** 16 parties réelles, la même liste à chaque passe, à 1, 4, 6, 8,
+12, 16 et 20 workers (détail et commande dans [PERF.md](PERF.md) § J4b) : le débit machine monte de
+612 t/s à 4 workers jusqu'à 1 150 à 16. 12 workers ne saturent pas, ils battent 6 de 17 à 28 %.
+Le débit **par partie** perd bien 37 % de 4 à 16 workers — la contention mémoire est réelle — mais
+elle est plus lente que le gain de parallélisme. Le « 1 008 → 615 ticks/s » du J3 venait donc de la
+géographie seule, déjà mesurée à ×2,58 : deux variables dans un run, et c'est l'innocente qu'on
+avait accusée.
+
+**Conséquence dans le code : aucune.** `workers_default()` rend déjà `min(cœurs, Go dispo)`, soit
+14 en local et 8 sur le serveur, dans le plateau mesuré des deux côtés. Une mesure qui ne change
+rien est un résultat, pas un échec : elle a supprimé un jalon d'optimisation.
+
+### Les deux pièges de méthode, dont un répété
+
+1. **Un échantillon « stratifié sur les ticks » ne mesure que sa queue de fin de passe.** À 8 500
+   ticks, le coût réel du J3 va de **16 s à 241 s** selon la map et le nombre de joueurs. Mon
+   premier plan — 48 parties stratifiées sur les ticks, 2 h de mur — mélangeait des parties de
+   coûts 15 fois différents : le mur d'une passe aurait été celui de la plus lente, pas celui de la
+   machine. L'échantillon retenu est choisi à **coût mesuré voisin** (123 s chacune au J3) : vagues
+   pleines, 18 min de mur au lieu de 2 h, et la question posée est bien celle qu'on mesure.
+2. **Le point à 20 workers ne veut rien dire** et je l'ai quand même lancé : avec 16 parties, 4
+   workers restent inoccupés et la passe est identique à celle de 16. Le plateau au-delà de 16
+   n'est pas mesuré.
+
+Déterminisme vérifié gratuitement au passage : ces 16 parties ont été rejouées **8 fois** à des
+concurrences différentes, 8 × 16 statuts `ok`, et les 307 788 lignes de `player_ticks` sont
+identiques à celles du J3 — nombre de lignes, sommes d'or et de troupes. La concurrence n'entame
+pas le déterminisme.
+
+### Abandonné, faute de besoin
+
+zstd-19, l'aller-retour NDJSON, le relevé d'état, le plancher de 800 Mo par processus, le démarrage
+de Node. Chacune est des jours de travail pour raccourcir un calcul que personne ne regarde. À
+reprendre si une mesure montre un jour qu'elles bloquent quelque chose de réel.
+
+### Ce qui reste ouvert
+
+- **Non expliqué** : ces mêmes parties coûtent 67 s à 12 workers sur le banc, contre 123 s pendant
+  le run du J3 à concurrence égale. Candidats : les géantes en vol pendant le J3 (906 Mo de RSS),
+  et l'éviction (`rm -rf` de worktrees et `npm ci` pendant que les workers tournent). L'écart étant
+  le même à tous les points, il ne touche pas la conclusion, et la projection garde les 65 t/s du
+  run réel.
+- La courbe sur le **serveur** (8 cœurs), et sur un mélange qui contient les géantes : les deux
+  points que le banc ne couvre pas.
+- `docs/PERF.md` annonçait **7 Go de RAM** en local depuis le J0 : la machine en a **15,7**. Sur
+  les deux machines, ce sont les cœurs qui plafonnent, pas la RAM.

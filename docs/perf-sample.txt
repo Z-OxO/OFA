@@ -1,0 +1,18 @@
+# J4b : echantillon fixe, 16 parties de cout mesure voisin de la mediane du J3 (~107 s de CPU
+# chacune, 155656 ticks au total). Requete dans docs/PERF.md § J4b.
+dnabqnu7NR
+cDMQxMt1Cb
+dohNq93jAw
+d3MRRNV73u
+cNsU7B1EYx
+cLLoDgycoR
+c7HT41t9yR
+cptwrA59zh
+dPkhd5kHDq
+cZpus19JqX
+dA5x4FnCrg
+ckJBCkyKWA
+d9z1XvegdJ
+cbPwypNpPG
+dJdxtL5RM5
+cpnvYpKqhX

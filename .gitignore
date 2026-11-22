@@ -1,5 +1,7 @@
 data/
-scratch/
+scratch/*
+# Le banc du J4b voyage par git : le serveur doit pouvoir refaire la mesure (PERF.md § J4b).
+!scratch/bench_workers.py
 .env
 .venv/
 __pycache__/

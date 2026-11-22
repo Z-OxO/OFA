@@ -157,41 +157,27 @@ Acceptation :
 - sur l'échantillon de confirmation, le rating d'avant-partie prédit le classement mieux qu'une référence naïve (corrélation de rang et log-loss rapportées) ;
 - les joueurs sans publicID sont traités explicitement.
 
-J4b — Optimisation mesurée (avant la re-sim à grande échelle et avant le J5)
-Motivation, chiffrée : la re-sim de 489 parties coûte **20,6 h de CPU**, soit 2,5 min par partie
-d'un jeu de navigateur, et **65 ticks/s/cœur** contre 168 au J3. Projeté sur les 20 000 parties
-visées : **840 h de CPU**. C'est le jalon qui ramène ce chiffre à quelque chose de défendable.
-Règle du jalon, non négociable : **aucune modification n'est conservée sans sa mesure avant/après,
-sur le même échantillon fixe**. Pas d'intuition, pas de « ça devrait aider ».
-Protocole :
-1. Profiler AVANT de toucher quoi que ce soit, et publier la répartition du temps : simulation du
-   moteur, relevé d'état (le runner sait déjà tourner sans `--state`), sérialisation NDJSON,
-   reparsing Python, compression Parquet, contention entre workers. Un échantillon fixe de parties
-   (petite, moyenne, géante) sert de référence à tout le jalon.
-2. Ne traiter que ce que le profil désigne, dans l'ordre décroissant de son poids.
-3. Une mesure par changement, isolée. Un changement qui ne se mesure pas est abandonné.
-Pistes déjà identifiées, chacune à confirmer ou à réfuter par la mesure (aucune n'est acquise),
-la première étant la seule à traiter avant les autres :
-- **le nombre de workers.** Mesuré : 6 workers donnaient 1 008 ticks/s pour la machine entière,
-  12 n'en donnent que 615 — deux fois plus de processus, 39 % de débit en moins. Signature d'une
-  saturation de bande passante mémoire. Mais la géographie ET le nombre de workers ont changé en
-  même temps dans ce run : les deux sont confondus, et c'est la faute de méthode à réparer d'abord.
-  L'expérience qui tranche : le même échantillon à 4, 6, 8, 12 et 16 workers ;
-- zstd niveau 19, choisi au J3 quand l'écriture coûtait 1 s contre 134 s de simulation — rapport
-  faux depuis que le volume a été multiplié par 2,4 ;
-- l'aller-retour NDJSON : 68 M de lignes écrites en JSON par Node, relues une par une en Python ;
-- le relevé d'état lui-même, dont le graphe de voisinage toutes les 10 ticks (`borders` pèse 3,6
-  fois `player_ticks`) ;
-- le plancher de ~800 Mo par processus, qui limite à 12 workers sur 20 cœurs ;
-- le démarrage de Node et la compilation tsx, payés une fois par partie.
-Acceptation :
-- docs/PERF.md porte le profil d'avant, puis une ligne par changement avec son gain mesuré et la
-  commande qui le produit ;
-- le CPU par partie est divisé par **au moins 3**, géographie comprise ;
-- le déterminisme est intact : mêmes parties, mêmes hashs, au moins autant de parties valides
-  qu'avant le jalon, et la comparaison des stats au record reste exacte ;
-- la projection pour 20 000 parties est recalculée et tient dans un budget écrit ;
-- aucun changement non mesuré n'a été conservé (le journal du jalon le montre).
+J4b — Le nombre de workers (fait, et refermé : son prémisse ne tenait pas)
+Motivation d'origine : 848 h de CPU projetées pour 20 000 parties. Mesuré depuis : c'est **4,4
+jours de tâche de fond** sur les 8 cœurs du serveur, qui n'a rien d'autre à faire et devant lequel
+personne n'attend. Le ×3 que ce jalon s'était fixé n'était rattaché à aucun besoin, seulement à un
+chiffre qui fait peur écrit en heures de CPU.
+Ce qui a été fait, la seule piste qui coûtait zéro ligne de code : **le nombre de workers**, le
+même échantillon fixe de 16 parties rejoué à 1, 4, 6, 8, 12, 16 et 20 workers (docs/PERF.md § J4b).
+Résultat : la saturation annoncée au J3 **n'existe pas** — 12 workers battent 6, 16 battent 12 —
+et le « 1 008 → 615 ticks/s » venait de la géographie seule. `workers_default()` est déjà dans le
+plateau sur les deux machines : aucun changement conservé, ce qui est le bon résultat d'une mesure.
+Acceptation, atteinte :
+- docs/PERF.md § J4b porte les huit passes, la commande qui les produit, et pourquoi l'échantillon
+  est choisi à coût mesuré voisin et non à ticks égaux (à 8 500 ticks, le coût réel va de 16 à 241 s) ;
+- le déterminisme est intact : 8 rejeux des mêmes 16 parties à des concurrences différentes,
+  8 × 16 statuts `ok`, et 307 788 lignes de `player_ticks` identiques à celles du J3 ;
+- la projection tient dans un budget écrit : 848 h de CPU = ~4,4 jours sur le serveur.
+Abandonnées faute de besoin, et non faute de temps — zstd-19, l'aller-retour NDJSON, le relevé
+d'état, le plancher mémoire par processus, le démarrage de Node : chacune est des jours de travail
+pour raccourcir un calcul que personne ne regarde. À ne reprendre que si une mesure montre qu'elles
+bloquent quelque chose de réel. La règle du jalon, elle, reste pour tout le projet : **aucune
+modification conservée sans sa mesure avant/après sur le même échantillon fixe**.
 
 J5 — Moteur d'analyse
 Indicateurs par phase de partie (ouverture, milieu…), protocole « Rigueur », génération des fiches. Chaque fiche passe par la skill /tactic et l'agent stats-reviewer.
