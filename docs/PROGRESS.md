@@ -9,6 +9,7 @@ Spec : [docs/SPEC.md](SPEC.md). Décisions : [docs/adr/](adr/). Perf : [docs/PER
 | J2 Normalisation | **terminé** | 2026-11-22 |
 | J3 Re-simulation | **terminé** — 513/514 parties valides (99,81 %) | 2026-11-22 |
 | J4 Niveau | **terminé** — log-loss 0,637 contre 0,693, Spearman 0,311 | 2026-11-22 |
+| J4b Optimisation mesurée | **à faire** — 20,6 h de CPU pour 489 parties, à diviser par 3 | |
 | J5 Moteur d'analyse | à faire | |
 | J6 Site web | à faire | |
 | J7 Mes parties | à faire | |

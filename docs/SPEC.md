@@ -157,6 +157,36 @@ Acceptation :
 - sur l'échantillon de confirmation, le rating d'avant-partie prédit le classement mieux qu'une référence naïve (corrélation de rang et log-loss rapportées) ;
 - les joueurs sans publicID sont traités explicitement.
 
+J4b — Optimisation mesurée (avant la re-sim à grande échelle et avant le J5)
+Motivation, chiffrée : la re-sim de 489 parties coûte **20,6 h de CPU**, soit 2,5 min par partie
+d'un jeu de navigateur, et **65 ticks/s/cœur** contre 168 au J3. Projeté sur les 20 000 parties
+visées : **840 h de CPU**. C'est le jalon qui ramène ce chiffre à quelque chose de défendable.
+Règle du jalon, non négociable : **aucune modification n'est conservée sans sa mesure avant/après,
+sur le même échantillon fixe**. Pas d'intuition, pas de « ça devrait aider ».
+Protocole :
+1. Profiler AVANT de toucher quoi que ce soit, et publier la répartition du temps : simulation du
+   moteur, relevé d'état (le runner sait déjà tourner sans `--state`), sérialisation NDJSON,
+   reparsing Python, compression Parquet, contention entre workers. Un échantillon fixe de parties
+   (petite, moyenne, géante) sert de référence à tout le jalon.
+2. Ne traiter que ce que le profil désigne, dans l'ordre décroissant de son poids.
+3. Une mesure par changement, isolée. Un changement qui ne se mesure pas est abandonné.
+Pistes déjà identifiées, chacune à confirmer ou à réfuter par la mesure (aucune n'est acquise) :
+- zstd niveau 19, choisi au J3 quand l'écriture coûtait 1 s contre 134 s de simulation — rapport
+  faux depuis que le volume a été multiplié par 2,4 ;
+- l'aller-retour NDJSON : 68 M de lignes écrites en JSON par Node, relues une par une en Python ;
+- le relevé d'état lui-même, dont le graphe de voisinage toutes les 10 ticks (`borders` pèse 3,6
+  fois `player_ticks`) ;
+- le plancher de ~800 Mo par processus, qui limite à 12 workers sur 20 cœurs ;
+- le démarrage de Node et la compilation tsx, payés une fois par partie.
+Acceptation :
+- docs/PERF.md porte le profil d'avant, puis une ligne par changement avec son gain mesuré et la
+  commande qui le produit ;
+- le CPU par partie est divisé par **au moins 3**, géographie comprise ;
+- le déterminisme est intact : mêmes parties, mêmes hashs, au moins autant de parties valides
+  qu'avant le jalon, et la comparaison des stats au record reste exacte ;
+- la projection pour 20 000 parties est recalculée et tient dans un budget écrit ;
+- aucun changement non mesuré n'a été conservé (le journal du jalon le montre).
+
 J5 — Moteur d'analyse
 Indicateurs par phase de partie (ouverture, milieu…), protocole « Rigueur », génération des fiches. Chaque fiche passe par la skill /tactic et l'agent stats-reviewer.
 Acceptation :

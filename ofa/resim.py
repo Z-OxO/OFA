@@ -25,9 +25,12 @@ import pyarrow.parquet as pq
 
 from . import engine, index, raw
 
-# Debit mesure au J0 : 159 a 253 ticks/s par coeur, median 172. Le timeout est large (6x)
-# parce qu'une partie lente n'est pas une partie en echec.
-TICKS_PER_SECOND = 172
+# Debit MESURE sur un run complet, geographie comprise et 12 workers en concurrence :
+# 65 ticks/s/coeur (489 parties, 4 820 839 ticks, 20,6 h de CPU). Le J0 mesurait 172 sur une
+# partie seule et sans la geographie : s'y fier a fait timeouter 24 parties sur 514, les plus
+# lourdes, et fait tomber l'acceptation de 99,8 % a 95,1 %. Le timeout reste large (6x) parce
+# qu'une partie lente n'est pas une partie en echec.
+TICKS_PER_SECOND = 65
 TIMEOUT_FLOOR = 120.0
 
 # Les 9 unites suivies par le runner, memes cles que les colonnes de stats de `participants`.
