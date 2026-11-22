@@ -1,0 +1,72 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Fiche tactique ofa (J5)",
+  "type": "object",
+  "required": [
+    "id", "enonce", "population", "mode_fenetre", "definition", "mesure_resultat",
+    "effet", "ic95", "n_observations", "n_joueurs", "n_parties",
+    "niveau_preuve", "raison_niveau", "robustesse", "limites", "exemples", "contre_exemples",
+    "sha_prereg", "genere_le"
+  ],
+  "additionalProperties": true,
+  "properties": {
+    "id": {"type": "string", "pattern": "^[a-z0-9-]+$"},
+    "enonce": {"type": "string", "minLength": 20},
+    "population": {"type": "string", "minLength": 1},
+    "mode_fenetre": {
+      "type": "object",
+      "required": ["t0", "t1", "controle"],
+      "properties": {
+        "t0": {"type": "integer", "multipleOf": 10},
+        "t1": {"type": "integer", "multipleOf": 10},
+        "controle": {"enum": ["t0", "t1"]}
+      }
+    },
+    "definition": {"type": "string", "minLength": 1},
+    "mesure_resultat": {
+      "type": "object",
+      "required": ["colonne", "sens_attendu", "unite"],
+      "properties": {
+        "colonne": {"enum": ["rank_pct", "won", "survived_after", "peak_share_after"]},
+        "sens_attendu": {"enum": ["+", "-"]},
+        "unite": {"type": "string"}
+      }
+    },
+    "effet": {"type": ["number", "null"]},
+    "ic95": {
+      "type": "array", "minItems": 2, "maxItems": 2,
+      "items": {"type": ["number", "null"]}
+    },
+    "p": {"type": ["number", "null"]},
+    "n_observations": {"type": "integer", "minimum": 300},
+    "n_joueurs": {"type": "integer", "minimum": 100},
+    "n_parties": {"type": "integer", "minimum": 1},
+    "niveau_preuve": {"enum": ["A", "B", "C"]},
+    "raison_niveau": {"type": "string", "minLength": 10},
+    "robustesse": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["test", "effet", "ic95"],
+        "properties": {"test": {"type": "string"}}
+      }
+    },
+    "limites": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 10}},
+    "exemples": {
+      "type": "array", "minItems": 5,
+      "items": {
+        "type": "object",
+        "required": ["game_id", "tick", "mmss", "replay"],
+        "properties": {
+          "game_id": {"type": "string"},
+          "tick": {"type": ["integer", "null"]},
+          "mmss": {"type": ["string", "null"]},
+          "replay": {"type": "string", "pattern": "^https://openfront\\.io/#replay-viewer="}
+        }
+      }
+    },
+    "contre_exemples": {"type": "array", "minItems": 1},
+    "sha_prereg": {"type": "string", "minLength": 8},
+    "genere_le": {"type": "string"}
+  }
+}

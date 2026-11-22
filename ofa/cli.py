@@ -6,7 +6,9 @@ import sys
 import time
 from pathlib import Path
 
-from . import config, engine, fixtures, index, ingest, normalize, purge, rating, resim
+import jsonschema
+
+from . import analyze, config, engine, fixtures, index, ingest, normalize, purge, rating, resim
 from .client import CircuitOpen, Client, rate_report
 
 
@@ -313,6 +315,100 @@ def cmd_rating(args) -> int:
     return 0
 
 
+def cmd_analyze(args) -> int:
+    """Le moteur d'analyse du J5 (ADR-0012) : cribler, explorer, confirmer une fois, publier."""
+    cfg = config.load()
+    root = Path(__file__).resolve().parent.parent
+
+    if args.action == "screen":
+        rows = analyze.screen(cfg, phase=args.phase, draws=args.draws, population=args.population)
+        ajuste = analyze.bh([r["p"] for r in rows if r["p"] is not None])
+        it = iter(ajuste)
+        for r in rows:
+            r["p_bh"] = next(it) if r["p"] is not None else None
+        # Par mesure, puis par taille d'effet : comparer des ticks a des rangs n'a pas de sens.
+        mesures = list(analyze.OUTCOMES)
+        rows.sort(key=lambda r: (mesures.index(r["resultat"]), -abs(r["effet"] or 0)))
+        print(f"criblage {args.phase} (exploration seule, {rows[0]['parties']} parties) :")
+        print(f"{'candidat':<28}{'resultat':<18}{'effet':>10}{'IC 95%':>22}{'p(BH)':>8}{'n':>8}")
+        for r in rows:
+            ic = (
+                f"[{r['ic95'][0]:+.4f},{r['ic95'][1]:+.4f}]"
+                if r["ic95"][0] is not None
+                else "non estimable"
+            )
+            print(
+                f"{r['candidat']:<28}{r['resultat']:<18}{r['effet'] or 0:>+10.4f}{ic:>22}"
+                f"{r['p_bh'] or 1:>8.3f}{r['n']:>8}"
+            )
+        out = root / "findings" / f"screen-{args.phase}.json"
+        out.write_text(json.dumps(rows, ensure_ascii=False, indent=1))
+        print(f"\n{len(rows)} mesures ecrites dans {out.relative_to(root)}")
+        neg = [r for r in rows if r["candidat"] == "controle_negatif" and r["signe"] != "nul"]
+        if neg:
+            print("ALERTE : le controle negatif n'est pas nul, la methode fabrique de l'effet")
+            return 1
+        return 0
+
+    if args.action == "report":
+        for r in analyze.reads(root):
+            print(json.dumps(r, ensure_ascii=False))
+        return 0
+
+    if not args.hypothese:
+        print("il faut un id d'hypothese", file=sys.stderr)
+        return 2
+    spec = analyze.load_spec(root, args.hypothese)
+
+    if args.action == "explore":
+        r = analyze.run(cfg, spec, sample="exploration", draws=args.draws)
+        analyze.save_run(root, r)
+        print(json.dumps(r, ensure_ascii=False, indent=1))
+        if r["mde"] and abs(r["effet"]) < r["mde"]:
+            print(
+                f"SOUS-PUISSANTE : effet {r['effet']:+.4f} sous l'effet minimal detectable "
+                f"{r['mde']:.4f}. Ne pas ouvrir la confirmation.",
+                file=sys.stderr,
+            )
+            return 1
+        return 0
+
+    if args.action == "confirm":
+        expl = analyze.load_run(root, spec.id, "exploration")
+        if expl is None:
+            print(f"explore d'abord : uv run ofa analyze explore {spec.id}", file=sys.stderr)
+            return 2
+        if expl["mde"] and abs(expl["effet"]) < expl["mde"] and not args.force:
+            print(
+                "REFUSE : hypothese sous-puissante en exploration, la lecture unique de "
+                "confirmation ne se gaspille pas (--force pour passer outre).",
+                file=sys.stderr,
+            )
+            return 1
+        r = analyze.confirm(cfg, root, spec, draws=args.draws, force=args.force)
+        analyze.save_run(root, r)
+        print(json.dumps(r, ensure_ascii=False, indent=1))
+        return 0
+
+    if args.action == "card":
+        fiche = analyze.card(cfg, root, spec, draws=args.draws)
+        schema = json.loads((root / "findings" / "card.schema.json").read_text())
+        jsonschema.validate(fiche, schema)
+        path = root / "findings" / "cards" / f"{spec.id}.json"
+        path.write_text(json.dumps(fiche, ensure_ascii=False, indent=1))
+        print(
+            f"{path.relative_to(root)} : niveau {fiche['niveau_preuve']} ({fiche['raison_niveau']})"
+        )
+        print(
+            f"effet {fiche['effet']:+.4f} IC [{fiche['ic95'][0]:+.4f}, {fiche['ic95'][1]:+.4f}]"
+            f" sur {fiche['n_observations']} obs, {fiche['n_joueurs']} joueurs,"
+            f" {fiche['n_parties']} parties"
+        )
+        return 0
+
+    return 2
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="ofa", description="OpenFront Analyzer")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -383,6 +479,27 @@ def main(argv: list[str] | None = None) -> int:
         help="relit data/rating et sort l'acceptation sur l'echantillon de confirmation",
     )
     p.set_defaults(func=cmd_rating)
+
+    p = sub.add_parser("analyze", help="moteur d'analyse : criblage, hypotheses, fiches (J5)")
+    p.add_argument(
+        "action",
+        choices=["screen", "explore", "confirm", "card", "report"],
+        help="screen = criblage sur l'exploration ; report = journal des lectures",
+    )
+    p.add_argument(
+        "hypothese", nargs="?", help="id de la pre-inscription (findings/prereg/<id>.yaml)"
+    )
+    p.add_argument("--phase", default="ouverture", choices=list(analyze.PHASES), help="pour screen")
+    p.add_argument(
+        "--population", default="mode = 'Free For All'", help="filtre SQL sur games (pour screen)"
+    )
+    p.add_argument("--draws", type=int, default=1000, help="tirages de bootstrap (defaut 1000)")
+    p.add_argument(
+        "--force",
+        action="store_true",
+        help="passe outre un refus de confirmation : A JUSTIFIER DANS LA PRE-INSCRIPTION",
+    )
+    p.set_defaults(func=cmd_analyze)
 
     p = sub.add_parser("rate-check", help="verifie le debit dans le journal des requetes")
     p.add_argument("--log", default=None)
