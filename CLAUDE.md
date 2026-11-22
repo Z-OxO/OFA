@@ -22,6 +22,11 @@ Spec : docs/SPEC.md (lis seulement la section du jalon en cours). Avancement : d
   data/parquet/, que `normalize` échange en bloc.
 - Tout appel à l'API OpenFront passe par ofa/client.py (débit limité). Aucun autre chemin.
 - TypeScript uniquement dans resim/. data/openfront/ = clone de référence, lecture seule.
+- Deux machines (ADR-0009) : le SERVEUR collecte, normalise et héberge le site ; ce PORTABLE
+  porte le moteur et la re-sim. Le cache moteur (clone + worktrees + maps, ~20 Go) ne va
+  jamais sur le serveur, c'est ce qui fait tenir ses 100 Go. Circulent : raw/full et
+  parquet/games vers ici, data/resim vers là-bas. Les Parquet du J2 se reconstruisent, ils ne
+  se transportent pas.
 
 ## Règles
 - IMPORTANT : aucune conclusion d'analyse sans la skill /tactic et l'agent stats-reviewer.
@@ -41,4 +46,6 @@ Spec : docs/SPEC.md (lis seulement la section du jalon en cours). Avancement : d
 - Le hook rtk résume la sortie de pytest et affiche « No tests collected » même quand tout passe : pour la vraie sortie, `rtk proxy "uv run pytest -q -m 'not slow and not network'"`. Il tronque aussi à 50 lignes, donc tout comptage vient d'un `count`, jamais de `| wc -l`.
 - multiprocessing : Python 3.14 démarre en forkserver, dont le socket est refusé par le sandbox. Passe `mp_context=multiprocessing.get_context("fork")`.
 - Le CLI `tsx` plante dans le sandbox (listen EPERM sur son pipe IPC) : `node --import tsx`.
+- Le limiteur de débit vit dans le processus : deux `ofa` qui appellent l'API en parallèle font
+  deux fois le débit configuré, sans alerte. Un seul à la fois.
 - `ofa rate-check` lit tout le journal, sans fenêtre : pour vérifier une seule exécution, filtrer les lignes à la main (les requêtes de `fetch-full` sont les `/game/<id>` SANS `?turns=false`).
