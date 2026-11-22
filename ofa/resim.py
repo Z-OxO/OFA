@@ -67,6 +67,33 @@ PLAYER_TICK_SCHEMA = pa.schema(
         ("atk_in", pa.int16()),
         ("atk_in_troops", pa.int64()),
         *[(f"u_{k}", pa.int32()) for k in UNIT_KEYS],
+        # Geographie (ADR-0011) : le detail par voisin est dans `borders`, ici les agregats
+        # qui ne coutent aucune ligne. `border` est le perimetre, `border_front` la part
+        # face a un joueur, `border_sea` la part cotiere, `border_longest` le plus long front.
+        # La boite englobante du plus gros bloc est la seule mesure de FORME que le moteur
+        # publie : etendue, allongement, centre approche. Nulle avant le premier carre.
+        ("box_min_x", pa.int32()),
+        ("box_min_y", pa.int32()),
+        ("box_max_x", pa.int32()),
+        ("box_max_y", pa.int32()),
+        ("decaying", pa.bool_()),  # territoire qui pourrit : le joueur n'est plus la
+        ("last_tile_change", pa.int32()),  # au tick EXACT : la stagnation sans l'arrondi a 10
+        ("border", pa.int32()),
+        ("neighbours", pa.int16()),
+        ("border_front", pa.int32()),
+        ("border_sea", pa.int32()),
+        ("border_longest", pa.int32()),
+        ("month", pa.string()),
+    ]
+)
+
+BORDER_SCHEMA = pa.schema(
+    [
+        ("game_id", pa.string()),
+        ("tick", pa.int32()),
+        ("a", pa.int32()),  # l'observateur, toujours un humain (comme `player_ticks`)
+        ("b", pa.int32()),  # le voisin, en smallID. 0 = TerraNullius, de la terre libre
+        ("tiles", pa.int32()),  # MES tuiles de frontiere qui lui font face (asymetrique)
         ("month", pa.string()),
     ]
 )
@@ -85,6 +112,13 @@ EVENT_SCHEMA = pa.schema(
         ("amount", pa.int64()),
         ("what", pa.string()),
         ("flag", pa.bool_()),
+        # Ou l'evenement a eu lieu : position de l'unite (unit_*), tuile de depart de
+        # l'attaque (attack_start). TileRef brut, comme `intents.tile` : les coordonnees se
+        # calculent en SQL avec `players.map_width` (x = tile % width, y = tile / width).
+        ("tile", pa.int64()),
+        # Largeur du front d'une attaque : a son depart (attack_start), la plus large
+        # atteinte (attack_end). Le moteur choisit ces tuiles, l'intent ne les porte pas.
+        ("front", pa.int32()),
         ("params", pa.string()),  # catch-all verbatim (ADR-0007)
         ("month", pa.string()),
     ]
@@ -103,6 +137,15 @@ PLAYER_SCHEMA = pa.schema(
         ("death_position", pa.int32()),  # le classement de fin de partie, idem
         ("final_tiles", pa.int32()),
         ("alive_at_end", pa.bool_()),
+        # Geographie statique (ADR-0011). Les trois dernieres sont des constantes de la
+        # partie, recopiees par joueur : sans elles une position de depart ne veut rien dire.
+        ("spawn_x", pa.int32()),
+        ("spawn_y", pa.int32()),
+        ("spawn_shore", pa.bool_()),
+        ("map_width", pa.int32()),
+        ("map_height", pa.int32()),
+        ("map_land", pa.int32()),
+        ("disconnected_at", pa.int32()),  # au tick exact ; null s'il n'a jamais decroche
         ("month", pa.string()),
     ]
 )
@@ -111,6 +154,7 @@ SCHEMAS = {
     "player_ticks": PLAYER_TICK_SCHEMA,
     "events": EVENT_SCHEMA,
     "players": PLAYER_SCHEMA,
+    "borders": BORDER_SCHEMA,
 }
 
 
@@ -142,6 +186,8 @@ EVENT_PROMOTED = {
     "amount": "amount",
     "what": "what",
     "ok": "flag",
+    "tile": "tile",
+    "front": "front",
 }
 
 
@@ -221,7 +267,7 @@ def _int(v) -> int | None:
 
 
 def tables_from_stream(path: Path, game_id: str, month: str) -> dict[str, pa.Table]:
-    """Lit le NDJSON du runner et rend les trois tables, triees pour le stockage.
+    """Lit le NDJSON du runner et rend les quatre tables, triees pour le stockage.
 
     Le tri par (small_id, tick) n'est pas cosmetique : mesure J0, il ramene la ligne de
     13,6 o a 5,00 o en Parquet zstd, parce que les series deviennent monotones.
@@ -229,6 +275,7 @@ def tables_from_stream(path: Path, game_id: str, month: str) -> dict[str, pa.Tab
     ticks: list[dict] = []
     events: list[dict] = []
     players: list[dict] = []
+    borders: list[dict] = []
     with path.open() as f:
         for line in f:
             row = json.loads(line)
@@ -258,11 +305,22 @@ def tables_from_stream(path: Path, game_id: str, month: str) -> dict[str, pa.Tab
                 }
                 for src, dest in EVENT_PROMOTED.items():
                     value = row.pop(src, None)
-                    if dest in ("gold", "troops", "amount", "unit_id"):
+                    if dest in ("gold", "troops", "amount", "unit_id", "tile"):
                         value = _int(value)
                     out[dest] = value
                 out["params"] = json.dumps(row, separators=(",", ":")) if row else None
                 events.append(out)
+            elif kind == "b":
+                borders.append(
+                    {
+                        "game_id": game_id,
+                        "tick": row["t"],
+                        "a": row["a"],
+                        "b": row["b"],
+                        "tiles": row["n"],
+                        "month": month,
+                    }
+                )
             elif kind == "p":
                 for p in row["players"]:
                     players.append({"game_id": game_id, "month": month, **p})
@@ -270,11 +328,17 @@ def tables_from_stream(path: Path, game_id: str, month: str) -> dict[str, pa.Tab
         "player_ticks": pa.Table.from_pylist(ticks, schema=PLAYER_TICK_SCHEMA),
         "events": pa.Table.from_pylist(events, schema=EVENT_SCHEMA),
         "players": pa.Table.from_pylist(players, schema=PLAYER_SCHEMA),
+        "borders": pa.Table.from_pylist(borders, schema=BORDER_SCHEMA),
     }
     tables["player_ticks"] = tables["player_ticks"].sort_by(
         [("small_id", "ascending"), ("tick", "ascending")]
     )
     tables["events"] = tables["events"].sort_by([("tick", "ascending")])
+    # Meme raison que player_ticks : trier par (a, tick) rend les series monotones, et
+    # c'est ce que `DELTA_BINARY_PACKED` compresse.
+    tables["borders"] = tables["borders"].sort_by(
+        [("a", "ascending"), ("tick", "ascending"), ("b", "ascending")]
+    )
     return tables
 
 
@@ -492,7 +556,7 @@ def resim(
     dry_run: bool = False,
     evict: bool = False,
 ) -> dict:
-    """Rejoue la selection et ecrit les trois tables. Reprend ou elle s'est arretee."""
+    """Rejoue la selection et ecrit les quatre tables. Reprend ou elle s'est arretee."""
     conn = index.connect(cfg.index_db)
     try:
         done = index.resim_done(conn)

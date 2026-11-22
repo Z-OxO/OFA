@@ -6,7 +6,9 @@
  *   1. les maps sont lues depuis $OFA_MAPS_DIR (notre cache par tree-sha), pas resources/maps ;
  *   2. on capture l'update « Win » (gagnant + stats de tous les joueurs) ;
  *   3. --out  : un JSON de resume, bigint en chaines decimales ;
- *   4. --state: un NDJSON, une ligne par echantillon d'etat et par evenement.
+ *   4. --state: un NDJSON, une ligne par echantillon d'etat et par evenement ;
+ *   5. la geographie (ADR-0011) : le graphe de voisinage a chaque echantillon, et la
+ *      position de depart. Le moteur ne l'archive jamais, elle n'existe que par re-sim.
  *
  * Ce fichier est copie dans <worktree>/tests/replay/ a l'execution : c'est de la que
  * @openfront/* et ../perf/fullgame/NodeGameMapLoader resolvent vers le BON commit.
@@ -51,6 +53,14 @@ const PROJECT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), 
 
 /** Un point d'etat tous les SAMPLE_EVERY ticks : la spec du J3 demande 10. */
 const SAMPLE_EVERY = 10;
+
+/**
+ * Tampon reutilise pour les 4 voisins cardinaux d'une tuile. `neighbors4` ecrit dedans et
+ * rend le nombre de voisins valides (3 sur un bord de carte, 2 dans un coin) : on evite
+ * ainsi d'allouer un tableau par tuile de frontiere, et il y en a des dizaines de milliers
+ * par echantillon. Meme motif que `NEIGHBOR_SCRATCH` dans PlayerImpl.ts du moteur.
+ */
+const NEIGHBOR_SCRATCH: number[] = [0, 0, 0, 0];
 
 /**
  * Les 9 types d'unites qui ont une colonne de stat dans `participants` (RECON § 6) :
@@ -342,17 +352,20 @@ async function main(): Promise<void> {
       const known = unitState.get(u.id);
       if (known === undefined) {
         unitState.set(u.id, { owner: u.ownerID, active: u.isActive });
-        event("unit_built", u.ownerID, null, { ...meta, lv: u.level });
-        if (!u.isActive) event("unit_lost", u.ownerID, null, meta);
+        // `pos` est la tuile de l'unite. Une construction a deja son intent `build_unit`,
+        // mais une perte ou une capture n'a aucun intent en face : sans ca on ne sait pas OU
+        // le front a cede. TileRef brut, comme `intents.tile` (x = ref % map_width).
+        event("unit_built", u.ownerID, null, { ...meta, lv: u.level, tile: u.pos });
+        if (!u.isActive) event("unit_lost", u.ownerID, null, { ...meta, tile: u.pos });
         continue;
       }
       if (u.ownerID !== known.owner) {
-        event("unit_captured", u.ownerID, known.owner, meta);
+        event("unit_captured", u.ownerID, known.owner, { ...meta, tile: u.pos });
         known.owner = u.ownerID;
       }
       if (!u.isActive && known.active) {
         known.active = false;
-        event("unit_lost", known.owner, null, meta);
+        event("unit_lost", known.owner, null, { ...meta, tile: u.pos });
       }
     }
   };
@@ -447,7 +460,15 @@ async function main(): Promise<void> {
   // n'arrivent en clair (les deux sont compactes), et le moteur n'expose pas de
   // decompacteur d'attaques. Un diff suffit, et il donne le tick exact.
   const wasAlive = new Set<number>();
-  const liveAttacks = new Map<string, { a: number; t: number | null; troops: number }>();
+  const liveAttacks = new Map<
+    string,
+    { a: number; t: number | null; troops: number; front: number; retreating: boolean }
+  >();
+  // La grille de tuiles ne change pas d'identite pendant la partie : on la prend une fois.
+  const map = game.map();
+  // smallID d'un voisin -> nombre de mes tuiles de frontiere qui lui font face. Reutilise
+  // d'un joueur a l'autre (`clear()`), parce qu'il est rempli des milliers de fois.
+  const facing = new Map<number, number>();
   const sampleAndDiff = () => {
     const tick = game.ticks();
     const seenAttacks = new Set<string>();
@@ -462,19 +483,38 @@ async function main(): Promise<void> {
         seenAttacks.add(id);
         const troops = atk.troops();
         const known = liveAttacks.get(id);
+        // `borderSize()` est la largeur du front de CETTE attaque, et `sourceTile()` l'endroit
+        // d'ou elle part : ni l'un ni l'autre n'est dans l'intent, c'est le moteur qui choisit
+        // les tuiles. `retreating()` dit qu'une retraite est en cours — l'intent
+        // `cancel_attack` dit qu'elle a ete demandee, pas qu'elle s'est faite.
+        const front = atk.borderSize();
         if (known === undefined) {
           const target = atk.target().smallID();
-          liveAttacks.set(id, { a: sid, t: target, troops });
-          event("attack_start", sid, target, { troops });
+          liveAttacks.set(id, {
+            a: sid,
+            t: target,
+            troops,
+            front,
+            retreating: atk.retreating(),
+          });
+          event("attack_start", sid, target, { troops, front, tile: atk.sourceTile() });
         } else {
           known.troops = troops;
+          // On garde le front le PLUS LARGE atteint : le front initial est deja dans
+          // attack_start, et c'est l'ampleur maximale qui dit la taille de l'offensive.
+          if (front > known.front) known.front = front;
+          if (atk.retreating()) known.retreating = true;
         }
       }
     }
     for (const [id, atk] of liveAttacks) {
       if (seenAttacks.has(id)) continue;
       liveAttacks.delete(id);
-      event("attack_end", atk.a, atk.t, { troops: atk.troops });
+      event("attack_end", atk.a, atk.t, {
+        troops: atk.troops,
+        front: atk.front,
+        ok: atk.retreating,
+      });
     }
     if (tick % SAMPLE_EVERY !== 0) return;
     for (const p of game.players()) {
@@ -515,6 +555,101 @@ async function main(): Promise<void> {
       row.atk_in = atkIn;
       row.atk_in_troops = atkInTroops;
       for (const [name, type] of TRACKED_UNITS) row[`u_${name}`] = p.unitCount(type);
+
+      // --- Geographie (ADR-0011) ---------------------------------------------------
+      // Deux sources, parce qu'elles ne disent pas la meme chose.
+      //
+      // 1. L'ENSEMBLE des voisins vient de `p.nearby()`, la notion du moteur lui-meme :
+      //    les proprietaires des tuiles voisines de ma frontiere (terre franchissable, et
+      //    pas de la terre libre irradiee), PLUS les joueurs separes de moi par une
+      //    riviere de moins de 5 tuiles, que je peux attaquer en bateau. Reimplementer
+      //    l'adjacence a la main manquerait ces derniers, et silencieusement : c'est la
+      //    lecon du J3 (on prend `player.team()`, on ne recalcule pas `humanTeams`).
+      // 2. La LONGUEUR de chaque front vient d'une passe sur mes tuiles de frontiere.
+      //    `borderTiles()` est un ensemble que le moteur tient a jour en continu, il n'y a
+      //    rien a recalculer ; pour chacune on regarde ses 4 voisins cardinaux. C'est le
+      //    motif de `sharesBorderWith` (PlayerImpl.ts), etendu a tous les voisins au lieu
+      //    de s'arreter au premier, et avec les memes regles de terrain que `computeNearby`.
+      //
+      // La longueur est volontairement asymetrique : « mes tuiles face a lui » n'est pas
+      // « ses tuiles face a moi », parce qu'une de mes tuiles peut toucher deux des siennes.
+      // C'est bien mon exposition a lui qu'on veut mesurer.
+      const mine = p.smallID();
+      facing.clear();
+      let borderSea = 0;
+      let borderFront = 0;
+      for (const tile of p.borderTiles()) {
+        let touchesWater = false;
+        let touchesPlayer = false;
+        // Dedoublonnage sans allocation : au plus 3 proprietaires etrangers sur 4 voisins.
+        let seen0 = -1;
+        let seen1 = -1;
+        let seen2 = -1;
+        const count = map.neighbors4(tile, NEIGHBOR_SCRATCH);
+        for (let i = 0; i < count; i++) {
+          const n = NEIGHBOR_SCRATCH[i];
+          if (map.isWater(n)) {
+            touchesWater = true;
+            continue;
+          }
+          // Une montagne ne se conquiert jamais (`conquer` leve dessus), et de la terre
+          // libre irradiee non plus tant que la retombee dure : ni l'une ni l'autre n'est
+          // une frontiere. Memes deux tests que `computeNearby` dans le moteur.
+          if (map.isImpassable(n)) continue;
+          const owner = map.ownerID(n);
+          if (owner === 0 && map.hasFallout(n)) continue;
+          if (owner === mine || owner === seen0 || owner === seen1 || owner === seen2) continue;
+          if (seen0 < 0) seen0 = owner;
+          else if (seen1 < 0) seen1 = owner;
+          else seen2 = owner;
+          facing.set(owner, (facing.get(owner) ?? 0) + 1);
+          // smallID 0 = TerraNullius, de la terre libre : de la place, pas un voisin.
+          if (owner !== 0) touchesPlayer = true;
+        }
+        if (touchesWater) borderSea++;
+        if (touchesPlayer) borderFront++;
+      }
+      // Les voisins que le moteur voit et que l'adjacence terrestre ne donne pas : ceux
+      // d'en face d'une riviere. Ils sortent avec une longueur de front de 0, et c'est
+      // exactement ce que ce 0 veut dire dans la table (docs/DATA.md).
+      for (const other of p.nearby()) {
+        const owner = other.smallID();
+        if (!facing.has(owner)) facing.set(owner, 0);
+      }
+      let neighbours = 0;
+      let longest = 0;
+      for (const [owner, tiles] of facing) {
+        if (owner !== 0) {
+          neighbours++;
+          if (tiles > longest) longest = tiles;
+        }
+        sink.write({ k: "b", t: tick, a: mine, b: owner, n: tiles });
+      }
+      // La boite englobante du plus gros bloc de territoire : la seule mesure de FORME que
+      // le moteur expose (il calcule les blocs a chaque tick pour la decomposition, mais
+      // n'en publie que celle-la). Donne l'etendue, l'allongement et le centre approche.
+      // Teste la valeur, pas `=== null` : l'interface declare `| null`, mais le champ n'est
+      // AFFECTE qu'au premier passage de PlayerExecution, donc il vaut `undefined` avant.
+      // Mesure : le re-jeu plantait a 0,7 s sur `cXvvUGMfYS` avec un test strict.
+      const box = p.largestClusterBoundingBox;
+      row.box_min_x = box ? box.min.x : null;
+      row.box_min_y = box ? box.min.y : null;
+      row.box_max_x = box ? box.max.x : null;
+      row.box_max_y = box ? box.max.y : null;
+      // `isDecaying` = territoire qui pourrit (joueur absent) ; `lastTileChange` = le dernier
+      // changement territorial au tick EXACT, donc la stagnation sans l'arrondi a 10 ticks.
+      //
+      // Deux accesseurs ecartes APRES mesure, pas par oubli : `tradingPartners()` vaut 102 sur
+      // 104 joueurs (`canTrade` ne teste que l'absence d'embargo — le vrai commerce, c'est
+      // `gold_trade`), et `doomsdayClockTicks()` compterait pour un etat jamais atteint
+      // (`doomsday` est faux sur les 10 518 824 lignes du J3).
+      row.decaying = p.isDecaying();
+      row.last_tile_change = p.lastTileChange();
+      row.border = p.borderTiles().size;
+      row.neighbours = neighbours;
+      row.border_front = borderFront;
+      row.border_sea = borderSea;
+      row.border_longest = longest;
       sink.write(row);
     }
   };
@@ -551,13 +686,27 @@ async function main(): Promise<void> {
     // `PlayerStats` est entierement optionnel dans le schema : on le lit comme un
     // dictionnaire quelconque, ce qui evite d'importer le type pour trois champs.
     const s: Record<string, unknown> = (cid === null ? undefined : stats[cid]) ?? {};
+    // `spawnTile()` est vide pour un joueur qui n'a jamais pose son premier carre ; le
+    // moteur garde alors la valeur dans ses stats. `?? undefined` normalise les deux.
+    const spawnTile = (p.spawnTile() ?? (s.spawnTile as number | undefined)) ?? undefined;
     return {
       small_id: p.smallID(),
       client_id: cid,
       player_type: p.type(),
       username: p.name(),
       team: p.team(),
-      spawn_tile: p.spawnTile() ?? s.spawnTile ?? null,
+      spawn_tile: spawnTile ?? null,
+      // Position de depart en coordonnees, et nature du terrain : la map seule ne suffit
+      // pas a savoir si un joueur a demarre au centre, dans un coin ou sur une cote.
+      spawn_x: spawnTile === undefined ? null : map.x(spawnTile),
+      spawn_y: spawnTile === undefined ? null : map.y(spawnTile),
+      spawn_shore: spawnTile === undefined ? null : map.isOceanShore(spawnTile),
+      // Constantes de la partie, recopiees sur chaque joueur : sans elles une position de
+      // depart ne veut rien dire, et il n'y a pas de table « partie » du cote de la re-sim.
+      map_width: map.width(),
+      map_height: map.height(),
+      map_land: map.numLandTiles(),
+      disconnected_at: p.disconnectedAtTick(),
       killed_by: s.killedBy ?? null,
       death_position: s.deathPosition ?? null,
       final_tiles: p.numTilesOwned(),

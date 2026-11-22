@@ -217,7 +217,7 @@ ou une nation, et on ne peut pas dire lequel avant le J3.
 
 ---
 
-# Les trois tables de re-simulation (J3) — `data/resim/`
+# Les quatre tables de re-simulation (J3) — `data/resim/`
 
 Elles ne viennent pas de `data/raw/` mais du **moteur**, rejoué au commit exact du record
 (ADR-0001, ADR-0002). Une partie n'y écrit **que si sa re-sim est valide** au sens de l'ADR-0003 :
@@ -236,10 +236,13 @@ duckdb -c "select count(*) from 'data/resim/player_ticks/**/*.parquet'"
 | `data/resim/player_ticks/month=YYYY-MM/part-*.parquet` | 10 518 824 | 86,7 Mo | 8,24 o |
 | `data/resim/events/month=YYYY-MM/part-*.parquet` | 17 452 122 | 77,9 Mo | 4,46 o |
 | `data/resim/players/month=YYYY-MM/part-*.parquet` | 188 166 | 3,4 Mo | 18,0 o |
+| `data/resim/borders/month=YYYY-MM/part-*.parquet` | **3,6 × `player_ticks`** | | |
 
 Mesuré le 2026-11-22 sur **513 parties** (les 514 `has_turns and stats_agreed and in_scope` de
 l'archive, moins une solo sans hash) : 322 Ko par partie, 20 500 lignes de trajectoire et
-34 000 événements chacune.
+34 000 événements chacune. **Ces totaux datent d'avant l'ADR-0011** : la géographie multiplie les
+lignes par 2,5 (mesure sur la pire partie : 205 038 → 514 423) et ajoute la table `borders`, qui
+pèse à elle seule 3,6 fois `player_ticks`. Les totaux sont à remesurer après la re-sim.
 
 **Racine séparée, et c'est voulu** : `ofa normalize` écrit `data/parquet.tmp/` puis **échange le
 répertoire entier**, donc tout ce qui vivrait sous `data/parquet/` serait détruit à la
@@ -335,6 +338,51 @@ quatre champs qui n'existent que par re-simulation.
 `c15Lo6e7na` : 12 humains, et des positions allant jusqu'à 15. Deux joueurs éliminés au même tick
 peuvent partager une position.
 
+## `borders` — 6 colonnes, une ligne par (partie, observateur, voisin, 10 ticks)
+
+La géographie (ADR-0011). **Les humains seulement comme observateur**, comme `player_ticks` ; le
+voisin, lui, peut être n'importe qui.
+
+| colonne | type | note |
+| --- | --- | --- |
+| `game_id`, `tick`, `month` | | `tick` est un multiple de 10, comme `player_ticks` |
+| `a` | i32 | l'observateur, en `small_id`. Toujours un humain |
+| `b` | i32 | le voisin, en `small_id`. **`0` = TerraNullius**, de la terre libre : de la place pour s'étendre, pas un adversaire |
+| `tiles` | i32 | **mes** tuiles de frontière qui lui font face. **`0` = voisin par l'eau** (séparé de moi par une rivière de moins de 5 tuiles, donc attaquable en bateau : c'est le moteur qui le dit, pas nous). Mesuré sur une partie de 3 061 ticks : 310 lignes par l'eau contre 10 031 par la terre — le cas est réel, une adjacence naïve l'aurait manqué |
+
+**La longueur est asymétrique, et c'est voulu** : « mes tuiles face à lui » n'est pas « ses tuiles
+face à moi », parce qu'une de mes tuiles peut toucher deux des siennes. Ce qui est mesuré est mon
+exposition à lui, donc une frontière entre deux humains produit **deux lignes**, une par point de
+vue, avec deux valeurs qui peuvent différer.
+
+L'**ensemble** des voisins vient de `player.nearby()`, la notion du moteur lui-même (rivières
+comprises, montagnes et terre irradiée exclues) ; seule la **longueur** est recomptée par ofa.
+Les agrégats correspondants sont sur `player_ticks` (`border`, `neighbours`, `border_front`,
+`border_sea`, `border_longest`) : pour « était-il exposé », ils suffisent et ne coûtent aucune
+ligne ; `borders` sert quand il faut savoir **lesquels**.
+
+## Les colonnes de géographie et d'état ajoutées par l'ADR-0011
+
+Sur `player_ticks`, en plus des 5 agrégats de frontière :
+
+| colonne | note |
+| --- | --- |
+| `box_min_x`, `box_min_y`, `box_max_x`, `box_max_y` | la boîte englobante du **plus gros bloc** de territoire : la seule mesure de forme que le moteur publie. **Nulle** avant le premier calcul de blocs (6,2 % des lignes sur la partie mesurée) : le moteur ne les recalcule que tous les 20 ticks au-dessus de 100 tuiles, et seulement si le territoire a bougé |
+| `decaying` | le territoire pourrit : le joueur n'est plus là |
+| `last_tile_change` | tick **exact** du dernier changement territorial, donc la stagnation sans l'arrondi à 10 ticks |
+
+Sur `players` : `spawn_x`, `spawn_y`, `spawn_shore` (départ sur une côte océanique), `map_width`,
+`map_height`, `map_land`, et `disconnected_at` (tick exact, nul s'il n'a jamais décroché).
+
+**`map_width` est la clé des coordonnées de tout le projet** : un `TileRef` s'y convertit par
+`x = tile % map_width` et `y = tile / map_width`. Cela vaut pour `players.spawn_tile`,
+`events.tile` **et les 91 784 lignes d'`intents`** du J2, qui ne portaient qu'un `TileRef` brut.
+
+Sur `events` : `tile` (position de l'unité pour `unit_*`, tuile de départ pour `attack_start`),
+`front` (largeur du front d'attaque : initiale sur `attack_start`, **maximale atteinte** sur
+`attack_end`), et `flag` sur `attack_end` qui vaut vrai si une **retraite** était en cours — là où
+l'intent `cancel_attack` ne dit que la demande.
+
 ## Ce que les tables de re-sim ne disent pas
 
 | manque | pourquoi |
@@ -345,6 +393,10 @@ peuvent partager une position.
 | ce qui se passe après le premier `Win` | le runner s'arrête là, comme `WinnerReplay.ts` : c'est l'état que le serveur a archivé |
 | les coordonnées d'un `tile` | toujours des `TileRef` bruts : `x = tile % largeur`, et la largeur dépend de la map **et** du commit |
 | les parties dont la re-sim n'est pas valide | elles n'écrivent rien ; `uv run ofa resim --report` les liste par cause |
+
+Et, depuis l'ADR-0011, ce qu'elles ne disent **toujours** pas : la **forme** d'un territoire. On a
+le périmètre (`border`) et l'aire (`tiles`), donc la compacité, mais ni les tuiles possédées ni le
+centre de masse. Les stocker à chaque échantillon serait un autre ordre de grandeur.
 
 ## Vérifier soi-même (indépendamment du code de `ofa`)
 

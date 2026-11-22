@@ -180,7 +180,7 @@ def cmd_engines(args) -> int:
 
 
 def cmd_resim(args) -> int:
-    """Rejoue les parties selectionnees et ecrit les trois tables de data/resim/."""
+    """Rejoue les parties selectionnees et ecrit les quatre tables de data/resim/."""
     cfg = config.load()
     if args.report:
         conn = index.connect(cfg.index_db)

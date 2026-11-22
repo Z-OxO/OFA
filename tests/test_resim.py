@@ -156,6 +156,17 @@ def test_tables_depuis_le_flux(tmp_path):
             etat(20, 2),
             etat(20, 1),
             {"k": "e", "t": 15, "ev": "conquest", "a": 1, "b": 2, "gold": "500"},
+            # Geographie des actions : la tuile et la largeur de front d'une attaque.
+            {
+                "k": "e",
+                "t": 18,
+                "ev": "attack_start",
+                "a": 1,
+                "b": 2,
+                "troops": "400",
+                "front": 12,
+                "tile": 7351,
+            },
             {
                 "k": "e",
                 "t": 12,
@@ -166,6 +177,11 @@ def test_tables_depuis_le_flux(tmp_path):
                 "ui": 9,
                 "lv": 2,
             },
+            # Geographie (ADR-0011) : une ligne par (observateur, voisin). b = 0 est de la
+            # terre libre, pas un joueur.
+            {"k": "b", "t": 20, "a": 1, "b": 2, "n": 14},
+            {"k": "b", "t": 10, "a": 1, "b": 0, "n": 31},
+            {"k": "b", "t": 10, "a": 2, "b": 1, "n": 9},
             {
                 "k": "p",
                 "players": [
@@ -180,6 +196,12 @@ def test_tables_depuis_le_flux(tmp_path):
                         "death_position": None,
                         "final_tiles": 10,
                         "alive_at_end": True,
+                        "spawn_x": 40,
+                        "spawn_y": 12,
+                        "spawn_shore": True,
+                        "map_width": 200,
+                        "map_height": 100,
+                        "map_land": 9000,
                     }
                 ],
             },
@@ -198,27 +220,49 @@ def test_tables_depuis_le_flux(tmp_path):
 
     events = tables["events"]
     assert events.schema == resim.EVENT_SCHEMA
-    assert events.column("tick").to_pylist() == [12, 15]
-    assert events.column("kind").to_pylist() == ["unit_built", "conquest"]
-    assert events.column("unit_type").to_pylist() == ["City", None]
-    assert events.column("gold").to_pylist() == [None, 500]
+    assert events.column("tick").to_pylist() == [12, 15, 18]
+    assert events.column("kind").to_pylist() == ["unit_built", "conquest", "attack_start"]
+    assert events.column("unit_type").to_pylist() == ["City", None, None]
+    assert events.column("gold").to_pylist() == [None, 500, None]
+    # Un TileRef reste un entier, jamais un flottant : il sert d'indice (x = tile % width).
+    assert events.column("tile").to_pylist() == [None, None, 7351]
+    assert events.column("front").to_pylist() == [None, None, 12]
     # Catch-all (ADR-0007) : `lv` n'a pas de colonne promue, il n'est pas perdu pour autant.
     assert json.loads(events.column("params").to_pylist()[0]) == {"lv": 2}
     assert events.column("params").to_pylist()[1] is None
+    assert events.column("params").to_pylist()[2] is None
 
     players = tables["players"]
     assert players.schema == resim.PLAYER_SCHEMA
     assert players.column("spawn_tile").to_pylist() == [123]
     assert players.column("team").to_pylist() == [None]
+    assert players.column("spawn_x").to_pylist() == [40]
+    assert players.column("spawn_shore").to_pylist() == [True]
+    assert players.column("map_land").to_pylist() == [9000]
+    assert players.column("disconnected_at").to_pylist() == [None]
+
+    borders = tables["borders"]
+    assert borders.schema == resim.BORDER_SCHEMA
+    # Trie par (a, tick, b), pour la meme raison que player_ticks : des series monotones.
+    assert list(
+        zip(
+            borders.column("a").to_pylist(),
+            borders.column("tick").to_pylist(),
+            borders.column("b").to_pylist(),
+            borders.column("tiles").to_pylist(),
+            strict=True,
+        )
+    ) == [(1, 10, 0, 31), (1, 20, 2, 14), (2, 10, 1, 9)]
 
 
-def test_flux_vide_donne_trois_tables_vides_au_bon_schema(tmp_path):
+def test_flux_vide_donne_des_tables_vides_au_bon_schema(tmp_path):
     """Un schema stable meme sans ligne : c'est le piege du J2, un lot vide typé Null."""
     path = tmp_path / "vide.ndjson"
     path.write_text("")
     tables = resim.tables_from_stream(path, "gid", "2026-11")
-    assert [t.num_rows for t in tables.values()] == [0, 0, 0]
-    assert tables["player_ticks"].schema == resim.PLAYER_TICK_SCHEMA
+    assert set(tables) == set(resim.SCHEMAS)
+    assert all(t.num_rows == 0 for t in tables.values())
+    assert all(tables[name].schema == schema for name, schema in resim.SCHEMAS.items())
 
 
 # --------------------------------------------------------------------------------------
