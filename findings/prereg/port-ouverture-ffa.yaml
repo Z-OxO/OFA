@@ -1,0 +1,21 @@
+# Pré-inscrite le 2026-11-22, AVANT toute mesure sur l'échantillon de confirmation.
+# Protocole : docs/SPEC.md § Rigueur, et docs/adr/0012-moteur-analyse.md.
+# Les seuils (médianes) sont calculés sur la population analysée, jamais écrits en dur.
+id: port-ouverture-ffa
+enonce: >
+  En FFA, construire au moins un port entre le tick 210 et le tick 1800 va avec un meilleur classement final parmi les humains, à niveau, état de départ et contexte égaux.
+population: "mode = 'Free For All'"
+comportement: "built_port >= 1"
+comportement_alt: "built_port >= 2"
+resultat: rank_pct
+sens_attendu: "-"
+t0: 210
+t1: 1800
+t0_alt: 210
+t1_alt: 3000
+controle: t0
+grappe: public_id
+tick_exemple: 1800
+n_min: 300
+joueurs_min: 100
+# Criblage : -0,067.

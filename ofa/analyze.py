@@ -170,10 +170,13 @@ inc as (
 ),
 -- `death_position` compte les nations (GameImpl.recordDeathPosition) : le rang est donc recalcule
 -- parmi les HUMAINS seuls. Plus petit = mieux : les vivants d'abord, puis les morts tardifs.
+-- `rank()` et non `row_number()` : deux joueurs elimines au meme tick PARTAGENT leur position
+-- (docs/DATA.md), et les departager dans l'ordre de lecture des Parquet rendait la mesure non
+-- reproductible — mesure a l'appui, -0,05504 / -0,05298 / -0,05285 pour la meme commande.
 fin as (
     select h.game_id, h.small_id, h.client_id, h.death_position, h.alive_at_end, h.final_tiles,
         h.spawn_shore, h.map_land, h.team,
-        1.0 * (row_number() over (partition by h.game_id order by h.alive_at_end desc,
+        1.0 * (rank() over (partition by h.game_id order by h.alive_at_end desc,
                 coalesce(h.death_position, 0) asc, h.final_tiles desc) - 1)
             / nullif(count(*) over (partition by h.game_id) - 1, 0) as rank_pct
     from players h
@@ -210,10 +213,10 @@ select
     1.0 * coalesce(ap.peak_after, s1.tiles) / nullif(f.map_land, 0) as peak_share_after,
     1.0 * f.final_tiles / nullif(f.map_land, 0) as final_share,
     case when r.rating_before is null then 0 else
-        ntile(4) over (partition by (r.rating_before is null) order by r.rating_before) end
-        as tier_rating,
-    ntile(4) over (partition by p.mode order by s0.tiles) as tier_state0,
-    ntile(4) over (partition by p.mode order by s1.tiles) as tier_state1,
+        ntile(4) over (partition by (r.rating_before is null)
+            order by r.rating_before, p.game_id, s1.small_id) end as tier_rating,
+    ntile(4) over (partition by p.mode order by s0.tiles, p.game_id, s1.small_id) as tier_state0,
+    ntile(4) over (partition by p.mode order by s1.tiles, p.game_id, s1.small_id) as tier_state1,
     case when p.num_players <= 8 then 'S' when p.num_players <= 24 then 'M' else 'L' end
         as tier_size,
     case
@@ -330,7 +333,7 @@ def cells(
     con.execute(f"""
         create or replace table cells as
         with t as (
-            select {grappe} as cluster, {stratum} as stratum, game_id,
+            select {grappe} as cluster, {stratum} as stratum, game_id, public_id as pid,
                    ({comportement}) as arm, cast({resultat} as double) as y
             from subjects where {sous_groupe}
         )
@@ -366,17 +369,22 @@ def effect(con: duckdb.DuckDBPyConnection, *, draws: int = 1000, seed: int = 202
         select sum(w * (m1 - m0)) / nullif(sum(w), 0) from m
     """).fetchone()[0]
 
-    n, n1, clusters, strata_used = con.execute("""
+    # `joueurs` et `grappes` ne sont pas la meme chose des que la grappe est la partie (Team) :
+    # la SPEC exige 100 joueurs DISTINCTS, et c'est le nombre de grappes qui fait la largeur de
+    # l'intervalle. Confondre les deux ferait passer 102 parties pour 102 joueurs.
+    n, n1, clusters, joueurs, strata_used = con.execute("""
         select (select sum(n) from cs join ok using (stratum)),
                (select sum(n) from cs join ok using (stratum) where arm),
                (select count(distinct cluster) from cs join ok using (stratum)),
+               (select count(distinct c.pid) from cells c join ok using (stratum)),
                (select count(*) from ok)
     """).fetchone()
     out = {
         "effet": point,
         "n": int(n or 0),
         "n_comportement": int(n1 or 0),
-        "joueurs": int(clusters or 0),
+        "joueurs": int(joueurs or 0),
+        "grappes": int(clusters or 0),
         "strates": int(strata_used or 0),
         "parties": con.execute("select count(distinct game_id) from cells").fetchone()[0],
         "tirages": draws,
@@ -386,17 +394,18 @@ def effect(con: duckdb.DuckDBPyConnection, *, draws: int = 1000, seed: int = 202
 
     # Bootstrap : on retire `clusters` grappes avec remise, `draws` fois, et on recalcule l'effet
     # a chaque tirage. Tout en SQL : 34 M de lignes de reechantillonnage passent en secondes.
-    con.execute(f"select setseed({(seed % 1000) / 1000.0})")
     # Les grappes du tirage sont celles qui vivent dans une strate utilisable, pas toutes.
     con.execute("""
         create or replace table cl as
-        select row_number() over () - 1 as i, cluster
+        -- `order by cluster` n'est pas decoratif : sans lui, la numerotation des grappes varie
+        -- d'une execution a l'autre et le bootstrap tire d'autres grappes pour la meme graine.
+        select row_number() over (order by cluster) - 1 as i, cluster
         from (select distinct cluster from cs join ok using (stratum))
     """)
     k = con.execute("select count(*) from cl").fetchone()[0]
     rows = con.execute(f"""
         with picks as (
-            select d.d, cast(floor(random() * {k}) as bigint) as i
+            select d.d, cast(hash(d.d * 1000003 + u.j + {seed}) % {k} as bigint) as i
             from range(0, {draws}) d(d), range(0, {k}) u(j)
         ),
         bm as (
@@ -508,11 +517,23 @@ def reads(root: Path) -> list[dict]:
     return [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
 
 
-def run(cfg: Config, spec: Spec, *, sample: str, draws: int, alt: bool = False) -> dict:
-    """Une mesure complete d'une hypothese, sur l'echantillon demande."""
-    t0 = spec.t0_alt if alt and spec.t0_alt else spec.t0
-    t1 = spec.t1_alt if alt and spec.t1_alt else spec.t1
-    comportement = spec.comportement_alt if alt and spec.comportement_alt else spec.comportement
+def run(
+    cfg: Config,
+    spec: Spec,
+    *,
+    sample: str,
+    draws: int,
+    alt_def: bool = False,
+    alt_win: bool = False,
+) -> dict:
+    """Une mesure complete d'une hypothese, sur l'echantillon demande.
+
+    Les deux leviers de robustesse sont SEPARES : une autre definition et une autre fenetre sont
+    deux tests, pas un. Les changer ensemble ne dirait pas lequel des deux a bouge.
+    """
+    t0 = spec.t0_alt if alt_win and spec.t0_alt else spec.t0
+    t1 = spec.t1_alt if alt_win and spec.t1_alt else spec.t1
+    comportement = spec.comportement_alt if alt_def and spec.comportement_alt else spec.comportement
     con = connect(cfg)
     n = build_subjects(con, t0=t0, t1=t1, population=spec.population, sample=sample)
     if not n:
@@ -577,6 +598,7 @@ def confirm(cfg: Config, root: Path, spec: Spec, *, draws: int) -> dict:
                     "sha_prereg": spec.sha,
                     "n": r["n"],
                     "joueurs": r["joueurs"],
+                    "grappes": r["grappes"],
                     "parties": r["parties"],
                     "effet": r["effet"],
                     "ic95": r["ic95"],
@@ -746,10 +768,10 @@ def card(cfg: Config, root: Path, spec: Spec, *, draws: int) -> dict:
         raise SystemExit(f"lance d'abord `ofa analyze explore {spec.id}`")
     rob = []
     if spec.comportement_alt:
-        r = run(cfg, spec, sample="exploration", draws=draws, alt=True)
+        r = run(cfg, spec, sample="exploration", draws=draws, alt_def=True)
         rob.append({"test": "autre definition", "definition": r["definition"], **r})
     if spec.t0_alt or spec.t1_alt:
-        r = run(cfg, spec, sample="exploration", draws=draws, alt=True)
+        r = run(cfg, spec, sample="exploration", draws=draws, alt_win=True)
         rob.append({"test": "autre fenetre", "fenetre": r["fenetre"], **r})
     tranches = subgroups(cfg, spec, by="tier_rating", draws=draws) if conf else []
     maps = subgroups(cfg, spec, by="map", draws=draws) if conf else []
@@ -776,8 +798,13 @@ def card(cfg: Config, root: Path, spec: Spec, *, draws: int) -> dict:
         "n_parties": base["parties"],
         "niveau_preuve": niveau,
         "raison_niveau": raison,
-        "exploration": {k: expl[k] for k in ("effet", "ic95", "p", "n", "joueurs", "parties")},
-        "confirmation": {k: conf[k] for k in ("effet", "ic95", "p", "n", "joueurs", "parties")}
+        "n_grappes": base.get("grappes"),
+        "exploration": {
+            k: expl[k] for k in ("effet", "ic95", "p", "n", "joueurs", "grappes", "parties")
+        },
+        "confirmation": {
+            k: conf[k] for k in ("effet", "ic95", "p", "n", "joueurs", "grappes", "parties")
+        }
         if conf
         else None,
         "robustesse": [

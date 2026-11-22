@@ -1,0 +1,21 @@
+# Pré-inscrite le 2026-11-22, AVANT toute mesure sur l'échantillon de confirmation.
+# Protocole : docs/SPEC.md § Rigueur, et docs/adr/0012-moteur-analyse.md.
+# Les seuils (médianes) sont calculés sur la population analysée, jamais écrits en dur.
+id: attaque-humain-tot-ffa
+enonce: >
+  En FFA, attaquer un humain plus tôt que la médiane des joueurs va avec une survie PLUS COURTE après le tick 1800, à niveau, état de départ et contexte égaux.
+population: "mode = 'Free For All'"
+comportement: "first_atk_human_tick is not null and first_atk_human_tick <= median(first_atk_human_tick) over ()"
+comportement_alt: "first_atk_human_tick is not null and first_atk_human_tick <= 600"
+resultat: survived_after
+sens_attendu: "-"
+t0: 210
+t1: 1800
+t0_alt: 210
+t1_alt: 3000
+controle: t0
+grappe: public_id
+tick_exemple: first_atk_human_tick
+n_min: 300
+joueurs_min: 100
+# Criblage : -376 ticks. SOUS-PUISSANTE sur l'échantillon d'aujourd'hui : à confirmer seulement après la campagne de re-simulation.

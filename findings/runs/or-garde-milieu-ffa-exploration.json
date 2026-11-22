@@ -1,0 +1,28 @@
+{
+ "effet": -0.04414147446727786,
+ "n": 3333,
+ "n_comportement": 1663,
+ "joueurs": 3142,
+ "grappes": 3142,
+ "strates": 101,
+ "parties": 240,
+ "tirages": 1000,
+ "ic95": [
+  -0.0562171104360404,
+  -0.0324427496120692
+ ],
+ "p": 0.001,
+ "ecart_type": 0.006318340956042526,
+ "mde": 0.017691354676919072,
+ "hypothese": "or-garde-milieu-ffa",
+ "sha_prereg": "16713330b9e7aee0",
+ "echantillon": "exploration",
+ "fenetre": [
+  1800,
+  6000
+ ],
+ "definition": "gold1 > median(gold1) over ()",
+ "resultat_mesure": "rank_pct",
+ "echantillon_suffisant": true,
+ "verdict": "confirme le sens attendu"
+}

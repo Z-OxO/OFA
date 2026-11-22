@@ -1,0 +1,28 @@
+{
+ "effet": -0.06539993191475593,
+ "n": 3315,
+ "n_comportement": 1473,
+ "joueurs": 3123,
+ "grappes": 3123,
+ "strates": 91,
+ "parties": 240,
+ "tirages": 1000,
+ "ic95": [
+  -0.07734997403249402,
+  -0.05478119608826986
+ ],
+ "p": 0.001,
+ "ecart_type": 0.005805336582527485,
+ "mde": 0.016254942431076957,
+ "hypothese": "transports-milieu-ffa",
+ "sha_prereg": "12fdd2c328376590",
+ "echantillon": "exploration",
+ "fenetre": [
+  1800,
+  6000
+ ],
+ "definition": "built_transport > median(built_transport) over ()",
+ "resultat_mesure": "rank_pct",
+ "echantillon_suffisant": true,
+ "verdict": "confirme le sens attendu"
+}

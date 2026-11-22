@@ -1,0 +1,28 @@
+{
+ "effet": -0.018029864167638698,
+ "n": 3312,
+ "n_comportement": 989,
+ "joueurs": 3124,
+ "grappes": 3124,
+ "strates": 96,
+ "parties": 240,
+ "tirages": 1000,
+ "ic95": [
+  -0.029312507554819973,
+  -0.00697933047257367
+ ],
+ "p": 0.002,
+ "ecart_type": 0.0057727669441945805,
+ "mde": 0.016163747443744825,
+ "hypothese": "trahison-milieu-ffa",
+ "sha_prereg": "5045e9b2445c87fa",
+ "echantillon": "exploration",
+ "fenetre": [
+  1800,
+  6000
+ ],
+ "definition": "betrayals >= 1",
+ "resultat_mesure": "rank_pct",
+ "echantillon_suffisant": true,
+ "verdict": "confirme le sens attendu"
+}

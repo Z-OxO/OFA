@@ -1,0 +1,28 @@
+{
+ "effet": -0.07421435594304673,
+ "n": 8623,
+ "n_comportement": 3758,
+ "joueurs": 7725,
+ "grappes": 7725,
+ "strates": 111,
+ "parties": 272,
+ "tirages": 1000,
+ "ic95": [
+  -0.08598498277382952,
+  -0.06190565373378224
+ ],
+ "p": 0.001,
+ "ecart_type": 0.0060109779060988165,
+ "mde": 0.016830738137076685,
+ "hypothese": "ville-tot-ffa",
+ "sha_prereg": "8d6d493d40eb21d1",
+ "echantillon": "exploration",
+ "fenetre": [
+  210,
+  1800
+ ],
+ "definition": "first_city_tick is not null and first_city_tick <= median(first_city_tick) over ()",
+ "resultat_mesure": "rank_pct",
+ "echantillon_suffisant": true,
+ "verdict": "confirme le sens attendu"
+}

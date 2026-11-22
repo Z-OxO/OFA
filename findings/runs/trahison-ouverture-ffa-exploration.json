@@ -1,0 +1,28 @@
+{
+ "effet": 0.0713061336612645,
+ "n": 7936,
+ "n_comportement": 275,
+ "joueurs": 7173,
+ "grappes": 7173,
+ "strates": 58,
+ "parties": 272,
+ "tirages": 1000,
+ "ic95": [
+  0.040604953553455135,
+  0.1028650083005157
+ ],
+ "p": 0.001,
+ "ecart_type": 0.01598337641525581,
+ "mde": 0.044753453962716266,
+ "hypothese": "trahison-ouverture-ffa",
+ "sha_prereg": "201c8e2d550cf73b",
+ "echantillon": "exploration",
+ "fenetre": [
+  210,
+  1800
+ ],
+ "definition": "betrayals >= 1",
+ "resultat_mesure": "rank_pct",
+ "echantillon_suffisant": true,
+ "verdict": "confirme le sens attendu"
+}

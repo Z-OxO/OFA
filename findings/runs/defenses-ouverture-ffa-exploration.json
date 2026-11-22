@@ -1,0 +1,28 @@
+{
+ "effet": -746.4111670467067,
+ "n": 8526,
+ "n_comportement": 1829,
+ "joueurs": 7643,
+ "grappes": 7643,
+ "strates": 98,
+ "parties": 272,
+ "tirages": 1000,
+ "ic95": [
+  -962.3292640738608,
+  -534.1695854793486
+ ],
+ "p": 0.001,
+ "ecart_type": 109.04865687716118,
+ "mde": 305.3362392560513,
+ "hypothese": "defenses-ouverture-ffa",
+ "sha_prereg": "0693918217656bd0",
+ "echantillon": "exploration",
+ "fenetre": [
+  210,
+  1800
+ ],
+ "definition": "built_defense > median(built_defense) over ()",
+ "resultat_mesure": "survived_after",
+ "echantillon_suffisant": true,
+ "verdict": "confirme le sens attendu"
+}

@@ -1,0 +1,21 @@
+# Pré-inscrite le 2026-11-22, AVANT toute mesure sur l'échantillon de confirmation.
+# Protocole : docs/SPEC.md § Rigueur, et docs/adr/0012-moteur-analyse.md.
+# Les seuils (médianes) sont calculés sur la population analysée, jamais écrits en dur.
+id: alliance-ouverture-team
+enonce: >
+  En Team, demander une alliance entre le tick 210 et le tick 1800 va avec une PLUS FAIBLE probabilité de victoire de l'équipe, à niveau, état de départ et contexte égaux.
+population: "mode = 'Team'"
+comportement: "ally_req >= 1"
+comportement_alt: "ally_ok >= 1"
+resultat: won
+sens_attendu: "-"
+t0: 210
+t1: 1800
+t0_alt: 210
+t1_alt: 3000
+controle: t0
+grappe: game_id
+tick_exemple: first_ally_tick
+n_min: 300
+joueurs_min: 100
+# Criblage : -0,134. La grappe est la PARTIE et non le joueur : en Team, les équipiers partagent le résultat. Effet inchangé (-0,1385 -> -0,1433) quand on stratifie aussi sur la pression subie, donc ce n'est pas 'je demande une alliance parce qu'on m'attaque'.

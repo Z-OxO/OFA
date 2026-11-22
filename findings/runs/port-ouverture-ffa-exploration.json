@@ -1,0 +1,28 @@
+{
+ "effet": -0.06655137539808195,
+ "n": 8626,
+ "n_comportement": 3999,
+ "joueurs": 7731,
+ "grappes": 7731,
+ "strates": 111,
+ "parties": 272,
+ "tirages": 1000,
+ "ic95": [
+  -0.07869739352722115,
+  -0.05556685081365601
+ ],
+ "p": 0.001,
+ "ecart_type": 0.005823753309423276,
+ "mde": 0.01630650926638517,
+ "hypothese": "port-ouverture-ffa",
+ "sha_prereg": "00281937ac9779c3",
+ "echantillon": "exploration",
+ "fenetre": [
+  210,
+  1800
+ ],
+ "definition": "built_port >= 1",
+ "resultat_mesure": "rank_pct",
+ "echantillon_suffisant": true,
+ "verdict": "confirme le sens attendu"
+}

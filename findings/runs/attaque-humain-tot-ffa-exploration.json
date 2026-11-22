@@ -1,0 +1,28 @@
+{
+ "effet": -420.2150491351602,
+ "n": 8570,
+ "n_comportement": 4239,
+ "joueurs": 7679,
+ "grappes": 7679,
+ "strates": 99,
+ "parties": 272,
+ "tirages": 1000,
+ "ic95": [
+  -598.7230585197291,
+  -244.14700805760535
+ ],
+ "p": 0.001,
+ "ecart_type": 90.19977719391719,
+ "mde": 252.5593761429681,
+ "hypothese": "attaque-humain-tot-ffa",
+ "sha_prereg": "4b28c0f4a0791105",
+ "echantillon": "exploration",
+ "fenetre": [
+  210,
+  1800
+ ],
+ "definition": "first_atk_human_tick is not null and first_atk_human_tick <= median(first_atk_human_tick) over ()",
+ "resultat_mesure": "survived_after",
+ "echantillon_suffisant": true,
+ "verdict": "confirme le sens attendu"
+}

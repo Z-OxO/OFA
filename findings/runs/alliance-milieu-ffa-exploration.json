@@ -1,0 +1,28 @@
+{
+ "effet": -0.07088237518429882,
+ "n": 3280,
+ "n_comportement": 2702,
+ "joueurs": 3097,
+ "grappes": 3097,
+ "strates": 89,
+ "parties": 240,
+ "tirages": 1000,
+ "ic95": [
+  -0.08688492817722226,
+  -0.042140883764081864
+ ],
+ "p": 0.001,
+ "ecart_type": 0.011533138807321125,
+ "mde": 0.03229278866049915,
+ "hypothese": "alliance-milieu-ffa",
+ "sha_prereg": "48a9787259a47cce",
+ "echantillon": "exploration",
+ "fenetre": [
+  1800,
+  6000
+ ],
+ "definition": "ally_req >= 1",
+ "resultat_mesure": "rank_pct",
+ "echantillon_suffisant": true,
+ "verdict": "confirme le sens attendu"
+}

@@ -1,0 +1,21 @@
+# Pré-inscrite le 2026-11-22, AVANT toute mesure sur l'échantillon de confirmation.
+# Protocole : docs/SPEC.md § Rigueur, et docs/adr/0012-moteur-analyse.md.
+# Les seuils (médianes) sont calculés sur la population analysée, jamais écrits en dur.
+id: ville-tot-ffa
+enonce: >
+  En FFA, construire sa première ville avant la médiane des joueurs va avec un meilleur classement final parmi les humains, à niveau, état de départ et contexte égaux.
+population: "mode = 'Free For All'"
+comportement: "first_city_tick is not null and first_city_tick <= median(first_city_tick) over ()"
+comportement_alt: "first_city_tick is not null and first_city_tick <= quantile_cont(first_city_tick, 0.25) over ()"
+resultat: rank_pct
+sens_attendu: "-"
+t0: 210
+t1: 1800
+t0_alt: 210
+t1_alt: 3000
+controle: t0
+grappe: public_id
+tick_exemple: first_city_tick
+n_min: 300
+joueurs_min: 100
+# Criblage : -0,072.

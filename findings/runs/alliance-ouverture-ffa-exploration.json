@@ -1,0 +1,28 @@
+{
+ "effet": -0.055809108925972566,
+ "n": 8630,
+ "n_comportement": 5642,
+ "joueurs": 7731,
+ "grappes": 7731,
+ "strates": 111,
+ "parties": 272,
+ "tirages": 1000,
+ "ic95": [
+  -0.06725319194626529,
+  -0.0450682700165214
+ ],
+ "p": 0.001,
+ "ecart_type": 0.005823514334609621,
+ "mde": 0.01630584013690694,
+ "hypothese": "alliance-ouverture-ffa",
+ "sha_prereg": "0a0684d06e3ce900",
+ "echantillon": "exploration",
+ "fenetre": [
+  210,
+  1800
+ ],
+ "definition": "ally_req >= 1",
+ "resultat_mesure": "rank_pct",
+ "echantillon_suffisant": true,
+ "verdict": "confirme le sens attendu"
+}

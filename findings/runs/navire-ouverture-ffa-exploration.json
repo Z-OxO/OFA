@@ -1,0 +1,28 @@
+{
+ "effet": -0.10788187382868705,
+ "n": 8162,
+ "n_comportement": 318,
+ "joueurs": 7338,
+ "grappes": 7338,
+ "strates": 78,
+ "parties": 272,
+ "tirages": 1000,
+ "ic95": [
+  -0.13670914673694734,
+  -0.07698588992396492
+ ],
+ "p": 0.001,
+ "ecart_type": 0.014997901009134845,
+ "mde": 0.041994122825577566,
+ "hypothese": "navire-ouverture-ffa",
+ "sha_prereg": "a214daf9db2f4d4a",
+ "echantillon": "exploration",
+ "fenetre": [
+  210,
+  1800
+ ],
+ "definition": "built_warship >= 1",
+ "resultat_mesure": "rank_pct",
+ "echantillon_suffisant": true,
+ "verdict": "confirme le sens attendu"
+}

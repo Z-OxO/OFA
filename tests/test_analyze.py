@@ -167,3 +167,32 @@ def test_benjamini_hochberg():
     assert [round(x, 4) for x in analyze.bh([0.01, 0.02, 0.03, 0.04])] == [0.04, 0.04, 0.04, 0.04]
     assert [round(x, 4) for x in analyze.bh([0.001, 0.5])] == [0.002, 0.5]
     assert analyze.bh([0.6]) == [0.6]
+
+
+def test_deux_mesures_identiques_rendent_le_meme_chiffre():
+    """La meme commande doit rendre le meme nombre. Deux fois, ca n'a pas ete le cas.
+
+    1. `ntile` et le rang final tranchaient leurs ex aequo dans l'ordre de lecture des Parquet ;
+    2. `random()` dans une requete parallelisee ne consomme pas sa graine dans un ordre stable.
+    Resultat mesure avant correction : -0,05504 / -0,05298 / -0,05285 pour la meme commande.
+    """
+    rng = random.Random(7)
+    rows = []
+    for j in range(600):
+        tier = 1 + j % 4
+        for g in range(2):
+            b = 1 if rng.random() < 0.5 else 0
+            # Beaucoup d'ex aequo exacts, comme le rating a 1500 et les rangs partages.
+            rows.append((f"g{g}", f"p{j}", tier, b, float(rng.randint(0, 3))))
+    con = duckdb.connect()
+    _table(con, rows)
+    a = _mesure(con)
+    b = _mesure(con)
+    # A 1e-9 pres, et pas au bit pres : DuckDB somme les doubles en parallele, donc l'ordre des
+    # additions varie et le dernier chiffre de la mantisse avec lui (mesure : 1e-16 d'ecart). Ce
+    # qu'on exige, c'est qu'aucun CHOIX du code ne depende d'un ordre de lecture.
+    assert abs(a["effet"] - b["effet"]) < 1e-9, (a["effet"], b["effet"])
+    assert abs(a["ic95"][0] - b["ic95"][0]) < 1e-9, (a["ic95"], b["ic95"])
+    assert abs(a["ic95"][1] - b["ic95"][1]) < 1e-9, (a["ic95"], b["ic95"])
+    assert a["p"] == b["p"]
+    assert a["strates"] == b["strates"] and a["joueurs"] == b["joueurs"]

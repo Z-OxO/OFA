@@ -1,0 +1,21 @@
+# Pré-inscrite le 2026-11-22, AVANT toute mesure sur l'échantillon de confirmation.
+# Protocole : docs/SPEC.md § Rigueur, et docs/adr/0012-moteur-analyse.md.
+# Les seuils (médianes) sont calculés sur la population analysée, jamais écrits en dur.
+id: transports-milieu-ffa
+enonce: >
+  En FFA, lancer plus d'attaques par transport que la médiane entre le tick 1800 et le tick 6000 va avec un meilleur classement final parmi les humains, à niveau, état et contexte égaux.
+population: "mode = 'Free For All'"
+comportement: "built_transport > median(built_transport) over ()"
+comportement_alt: "built_transport >= 1"
+resultat: rank_pct
+sens_attendu: "-"
+t0: 1800
+t1: 6000
+t0_alt: 1800
+t1_alt: 4500
+controle: t0
+grappe: public_id
+tick_exemple: 6000
+n_min: 300
+joueurs_min: 100
+# Criblage : -0,066.

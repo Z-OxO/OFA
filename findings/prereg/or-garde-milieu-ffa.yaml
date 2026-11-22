@@ -1,0 +1,21 @@
+# Pré-inscrite le 2026-11-22, AVANT toute mesure sur l'échantillon de confirmation.
+# Protocole : docs/SPEC.md § Rigueur, et docs/adr/0012-moteur-analyse.md.
+# Les seuils (médianes) sont calculés sur la population analysée, jamais écrits en dur.
+id: or-garde-milieu-ffa
+enonce: >
+  En FFA, finir le tick 6000 avec plus d'or en caisse que la médiane va avec un meilleur classement final parmi les humains, à POSITION ÉGALE au tick 6000 et à niveau égal.
+population: "mode = 'Free For All'"
+comportement: "gold1 > median(gold1) over ()"
+comportement_alt: "gold1 > quantile_cont(gold1, 0.75) over ()"
+resultat: rank_pct
+sens_attendu: "-"
+t0: 1800
+t1: 6000
+t0_alt: 1800
+t1_alt: 4500
+controle: t1
+grappe: public_id
+tick_exemple: 6000
+n_min: 300
+joueurs_min: 100
+# Criblage : -0,044 au milieu, et NUL en ouverture (+0,004). Seule hypothèse contrôlée à t1 : c'est un choix à position égale (garder ou dépenser), pas une dose.

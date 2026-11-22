@@ -1,0 +1,28 @@
+{
+ "effet": -0.13579701954379783,
+ "n": 3623,
+ "n_comportement": 781,
+ "joueurs": 3337,
+ "grappes": 102,
+ "strates": 85,
+ "parties": 104,
+ "tirages": 1000,
+ "ic95": [
+  -0.16314460624284136,
+  -0.08171249890989878
+ ],
+ "p": 0.001,
+ "ecart_type": 0.021002463034025722,
+ "mde": 0.058806896495272015,
+ "hypothese": "alliance-ouverture-team",
+ "sha_prereg": "4204925eb02d2718",
+ "echantillon": "exploration",
+ "fenetre": [
+  210,
+  1800
+ ],
+ "definition": "ally_req >= 1",
+ "resultat_mesure": "won",
+ "echantillon_suffisant": true,
+ "verdict": "confirme le sens attendu"
+}
