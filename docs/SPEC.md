@@ -170,7 +170,13 @@ Protocole :
    (petite, moyenne, géante) sert de référence à tout le jalon.
 2. Ne traiter que ce que le profil désigne, dans l'ordre décroissant de son poids.
 3. Une mesure par changement, isolée. Un changement qui ne se mesure pas est abandonné.
-Pistes déjà identifiées, chacune à confirmer ou à réfuter par la mesure (aucune n'est acquise) :
+Pistes déjà identifiées, chacune à confirmer ou à réfuter par la mesure (aucune n'est acquise),
+la première étant la seule à traiter avant les autres :
+- **le nombre de workers.** Mesuré : 6 workers donnaient 1 008 ticks/s pour la machine entière,
+  12 n'en donnent que 615 — deux fois plus de processus, 39 % de débit en moins. Signature d'une
+  saturation de bande passante mémoire. Mais la géographie ET le nombre de workers ont changé en
+  même temps dans ce run : les deux sont confondus, et c'est la faute de méthode à réparer d'abord.
+  L'expérience qui tranche : le même échantillon à 4, 6, 8, 12 et 16 workers ;
 - zstd niveau 19, choisi au J3 quand l'écriture coûtait 1 s contre 134 s de simulation — rapport
   faux depuis que le volume a été multiplié par 2,4 ;
 - l'aller-retour NDJSON : 68 M de lignes écrites en JSON par Node, relues une par une en Python ;
