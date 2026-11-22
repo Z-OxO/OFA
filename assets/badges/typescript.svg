@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 181 28" width="181" height="28" role="img" aria-label="typescript: engine replay">
+  <style>.t{font-family:ui-sans-serif,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;font-size:11.5px}</style>
+  <clipPath id="r"><rect width="181" height="28" rx="5"/></clipPath>
+  <g clip-path="url(#r)">
+    <rect width="78" height="28" fill="#2e2e2b"/>
+    <rect x="78" width="103" height="28" fill="#3987e5"/>
+  </g>
+  <g class="t" text-anchor="middle">
+    <text x="39.0" y="19" fill="#c3c2b7">typescript</text>
+    <text x="129.5" y="19" fill="#ffffff" font-weight="600">engine replay</text>
+  </g>
+</svg>

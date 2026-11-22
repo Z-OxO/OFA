@@ -3,13 +3,14 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white" alt="Python 3.12" height="26">
-  <img src="https://img.shields.io/badge/TypeScript-engine%20replay-3178C6?logo=typescript&logoColor=white" alt="TypeScript engine replay" height="26">
-  <img src="https://img.shields.io/badge/DuckDB%20%2B%20Parquet-source%20of%20truth-FFF000?logo=duckdb&logoColor=black" alt="DuckDB and Parquet" height="26">
-  <img src="https://img.shields.io/badge/tests-100%20on%20real%20games-2ea44f" alt="100 tests on real games" height="26">
-  <img src="https://img.shields.io/badge/re--simulated-99.81%25%20exact-2ea44f" alt="99.81 percent exact" height="26">
-  <img src="https://img.shields.io/badge/ADRs-12-blue" alt="12 ADRs" height="26">
-  <img src="https://img.shields.io/badge/built%20with-Claude%20Code-D97757" alt="Built with Claude Code" height="26">
+  <img src="assets/badges/python.svg" alt="Python 3.12" height="28">
+  <img src="assets/badges/typescript.svg" alt="TypeScript: engine replay" height="28">
+  <img src="assets/badges/duckdb.svg" alt="DuckDB and Parquet: source of truth" height="28">
+  <img src="assets/badges/tests.svg" alt="100 tests, on real games" height="28">
+  <img src="assets/badges/exact.svg" alt="Re-simulated: 99.81 percent exact" height="28">
+  <img src="assets/badges/adr.svg" alt="12 decision records" height="28">
+  <img src="assets/badges/byhand.svg" alt="0 lines written by hand" height="28">
+  <img src="assets/badges/claude.svg" alt="Built with Claude Code" height="28">
 </p>
 
 <p align="center">
@@ -78,7 +79,7 @@ being wrong *costs something*:
   bad estimates and the limits, milestone by milestone. That's the file that makes the next session
   as good as the last one.
 
-After 38 commits: **4 371 lines of Python**, 753 of TypeScript, 1 897 of tests — and **3 661 lines
+As it stands: **4 371 lines of Python**, 753 of TypeScript, 1 897 of tests — and **3 661 lines
 of documentation**. The docs aren't decoration; they're the part doing the steering.
 
 <details>
@@ -97,6 +98,22 @@ of documentation**. The docs aren't decoration; they're the part doing the steer
 | `docs/PROGRESS.md` | Done, numbers, decisions, limits — including everything that was wrong. |
 
 </details>
+
+## The skills I wired in, and why
+
+A skill is a procedure the agent loads when it needs it, instead of me retyping instructions that
+drift from one session to the next. Four earn their place here.
+
+| Skill | Why it's there |
+|---|---|
+| **`/tactic`** · written for this repo | Any claim shaped like *"doing X helps you win"* has to go through it: pre-register the hypothesis, explore, confirm **once**, re-test with another definition and another time window, publish a schema-validated card, then hand it to the reviewer agent. Without it the natural move is to publish the first strong number — which is exactly how analytics projects end up wrong. |
+| **`/analyze-player`** · written for this repo | The entry point for the last milestone: my own games against winners of the same level, on the same map, at the same moments. It exists already so the shape of that report is decided before the data lands. |
+| **`dataviz`** · bundled | Used for the three images on this page. It picks the *form* before the colour and ships a **runnable palette validator** — lightness band, chroma floor, colour-blind separation, contrast. All three passed, which is why they read the same in light and dark mode. |
+| **`webapp-testing`** · bundled | Playwright, for the website milestone. Not used yet, and wired anyway: the harness goes in before the work, not after. |
+
+And two session habits that aren't skills but do the same job: **plan mode** on every milestone, and
+a lazy-senior-dev mode that keeps each change to the smallest one that fully solves the task —
+because an agent's default move is to add an abstraction nobody asked for.
 
 ## The pipeline
 
