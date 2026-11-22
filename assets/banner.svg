@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 260" width="1200" height="260" role="img" aria-label="ofa, OpenFront Analyzer: collect real games, replay them in the real engine, only then say what wins. 99.81 percent replayed exact, 74.3 million rows of trajectory, 100 tests on real records, 0 lines written by hand.">
+  <defs>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#3987e5"/>
+      <stop offset="0.5" stop-color="#199e70"/>
+      <stop offset="1" stop-color="#d95926"/>
+    </linearGradient>
+  </defs>
+  <style>
+    .t  { font-family: ui-sans-serif, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+    .m  { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    .h1 { font-size: 46px; font-weight: 700; fill: #f0efec; }
+    .sub{ font-size: 19px; fill: #c3c2b7; }
+    .num{ font-size: 25px; font-weight: 700; fill: #f0efec; }
+    .lab{ font-size: 12.5px; fill: #c3c2b7; letter-spacing: .04em; }
+  </style>
+
+  <rect x="0" y="0" width="1200" height="260" rx="18" fill="#1a1a19"/>
+  <rect x="0" y="0" width="1200" height="5" rx="2.5" fill="url(#accent)"/>
+
+  <text class="t h1" x="48" y="84">ofa — OpenFront Analyzer</text>
+  <text class="t sub" x="48" y="120">Collect real games · replay them in the real game engine · only then say what wins</text>
+
+  <line x1="48" y1="150" x2="1152" y2="150" stroke="#3a3a37" stroke-width="1"/>
+
+  <g>
+    <text class="t num" x="48"  y="196" fill="#3987e5">99.81%</text>
+    <text class="t lab" x="48"  y="220">REPLAYED BIT-EXACT</text>
+
+    <text class="t num" x="318" y="196" fill="#199e70">74.3 M</text>
+    <text class="t lab" x="318" y="220">ROWS OF TRAJECTORY</text>
+
+    <text class="t num" x="606" y="196" fill="#c98500">100</text>
+    <text class="t lab" x="606" y="220">TESTS, ON REAL RECORDS</text>
+
+    <text class="t num" x="906" y="196" fill="#d95926">0</text>
+    <text class="t lab" x="906" y="220">LINES WRITTEN BY HAND</text>
+  </g>
+
+  <text class="m lab" x="1152" y="84" text-anchor="end" fill="#8a8a82">built with Claude Code</text>
+</svg>

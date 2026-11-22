@@ -1,0 +1,103 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 620" width="1200" height="620" role="img" aria-label="How the project is built: five steps (write the rule, plan first, measure don't claim, try to break it, write down what is false) and three gates that block the agent (a hook on red tests, an ADR for architecture changes, one single look at the held-out sample).">
+  <style>
+    .t    { font-family: ui-sans-serif, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+    .m    { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    .title{ font-size: 24px; font-weight: 700; fill: #f0efec; }
+    .kick { font-size: 14px; fill: #c3c2b7; }
+    .sect { font-size: 13px; font-weight: 700; fill: #8a8a82; letter-spacing: .10em; }
+    .step { font-size: 15.5px; font-weight: 700; fill: #f0efec; }
+    .body { font-size: 12.5px; fill: #c3c2b7; }
+    .no   { font-size: 13px; font-weight: 700; }
+    .code { font-size: 12px; fill: #8a8a82; }
+    .gate { font-size: 15px; font-weight: 700; fill: #f0efec; }
+  </style>
+
+  <rect x="0" y="0" width="1200" height="620" rx="18" fill="#1a1a19"/>
+
+  <text class="t title" x="40" y="54">How it is built — I steer, the agent writes, the harness checks</text>
+  <text class="t kick"  x="40" y="80">Vibe-coding is not “ask and hope”. It is a loop, and every step has something that can stop it.</text>
+
+  <!-- ===== the five steps ===== -->
+  <text class="t sect" x="40" y="126">THE LOOP, ONE MILESTONE AT A TIME</text>
+
+  <g>
+    <!-- 1 -->
+    <rect x="40" y="142" width="190" height="124" rx="12" fill="#232321" stroke="#3987e5" stroke-width="1.5"/>
+    <text class="t no"   x="58" y="168" fill="#3987e5">1</text>
+    <text class="t step" x="58" y="192">Write the rule</text>
+    <text class="t body" x="58" y="214">A spec with a rigour</text>
+    <text class="t body" x="58" y="231">section the agent</text>
+    <text class="t body" x="58" y="248">cannot argue out of.</text>
+    <path d="M238 204 l14 0 m-5 -5 l5 5 l-5 5" stroke="#8a8a82" stroke-width="1.6" fill="none"/>
+
+    <!-- 2 -->
+    <rect x="262" y="142" width="190" height="124" rx="12" fill="#232321" stroke="#3a3a37" stroke-width="1.5"/>
+    <text class="t no"   x="280" y="168" fill="#3987e5">2</text>
+    <text class="t step" x="280" y="192">Plan before code</text>
+    <text class="t body" x="280" y="214">Every milestone starts</text>
+    <text class="t body" x="280" y="231">in plan mode. I approve</text>
+    <text class="t body" x="280" y="248">before a file exists.</text>
+    <path d="M460 204 l14 0 m-5 -5 l5 5 l-5 5" stroke="#8a8a82" stroke-width="1.6" fill="none"/>
+
+    <!-- 3 -->
+    <rect x="484" y="142" width="190" height="124" rx="12" fill="#232321" stroke="#3a3a37" stroke-width="1.5"/>
+    <text class="t no"   x="502" y="168" fill="#3987e5">3</text>
+    <text class="t step" x="502" y="192">Measure, not claim</text>
+    <text class="t body" x="502" y="214">No number without the</text>
+    <text class="t body" x="502" y="231">command that produced</text>
+    <text class="t body" x="502" y="248">it. Real games only.</text>
+    <path d="M682 204 l14 0 m-5 -5 l5 5 l-5 5" stroke="#8a8a82" stroke-width="1.6" fill="none"/>
+
+    <!-- 4 -->
+    <rect x="706" y="142" width="190" height="124" rx="12" fill="#232321" stroke="#3a3a37" stroke-width="1.5"/>
+    <text class="t no"   x="724" y="168" fill="#3987e5">4</text>
+    <text class="t step" x="724" y="192">Try to break it</text>
+    <text class="t body" x="724" y="214">A second agent’s only</text>
+    <text class="t body" x="724" y="231">job is to refute the</text>
+    <text class="t body" x="724" y="248">finding before it ships.</text>
+    <path d="M904 204 l14 0 m-5 -5 l5 5 l-5 5" stroke="#8a8a82" stroke-width="1.6" fill="none"/>
+
+    <!-- 5 -->
+    <rect x="928" y="142" width="190" height="124" rx="12" fill="#232321" stroke="#199e70" stroke-width="1.5"/>
+    <text class="t no"   x="946" y="168" fill="#199e70">5</text>
+    <text class="t step" x="946" y="192">Log what is false</text>
+    <text class="t body" x="946" y="214">Limits and refuted</text>
+    <text class="t body" x="946" y="231">assumptions go in the</text>
+    <text class="t body" x="946" y="248">docs. Then commit.</text>
+  </g>
+
+  <!-- loop arrow back -->
+  <path d="M1023 274 q0 34 -40 34 H215 q-40 0 -40 -34" stroke="#3a3a37" stroke-width="1.6" fill="none"/>
+  <path d="M175 282 l0 -14 m-5 5 l5 -5 l5 5" stroke="#3a3a37" stroke-width="1.6" fill="none"/>
+  <text class="t body" x="599" y="314" text-anchor="middle" fill="#8a8a82">next milestone — never two at once</text>
+
+  <!-- ===== the three gates ===== -->
+  <text class="t sect" x="40" y="372">THREE GATES THAT ACTUALLY BITE</text>
+
+  <g>
+    <rect x="40" y="388" width="350" height="128" rx="12" fill="#201f1d" stroke="#e66767" stroke-width="1.5"/>
+    <text class="t gate" x="60" y="420">A hook blocks the turn</text>
+    <text class="t body" x="60" y="446">Fast tests red → the agent cannot</text>
+    <text class="t body" x="60" y="463">end its turn. 100 tests, 15 seconds,</text>
+    <text class="t body" x="60" y="480">run on real downloaded games.</text>
+    <text class="m code" x="60" y="503">.claude/hooks/gate.sh</text>
+
+    <rect x="425" y="388" width="350" height="128" rx="12" fill="#201f1d" stroke="#c98500" stroke-width="1.5"/>
+    <text class="t gate" x="445" y="420">No architecture change</text>
+    <text class="t body" x="445" y="446">…without a decision record: the</text>
+    <text class="t body" x="445" y="463">options, the measurement, and how</text>
+    <text class="t body" x="445" y="480">to re-check it later. Twelve so far.</text>
+    <text class="m code" x="445" y="503">docs/adr/0001…0012</text>
+
+    <rect x="810" y="388" width="350" height="128" rx="12" fill="#201f1d" stroke="#199e70" stroke-width="1.5"/>
+    <text class="t gate" x="830" y="420">One look at held-out data</text>
+    <text class="t body" x="830" y="446">A hypothesis is written down first,</text>
+    <text class="t body" x="830" y="463">then the code refuses a second read</text>
+    <text class="t body" x="830" y="480">of the confirmation sample. Ever.</text>
+    <text class="m code" x="830" y="503">findings/reads.jsonl</text>
+  </g>
+
+  <line x1="40" y1="548" x2="1160" y2="548" stroke="#3a3a37" stroke-width="1"/>
+  <text class="t body" x="40" y="578" fill="#f0efec">What it bought: six real mistakes caught by a measurement instead of a re-read —</text>
+  <text class="t body" x="40" y="597">a benchmark that accused the wrong variable, a window that matched nothing, a guard that cried wolf, three sources of non-reproducibility, and one estimate of mine off by 6×.</text>
+</svg>

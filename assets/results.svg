@@ -1,0 +1,80 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 470" width="1000" height="470" role="img" aria-label="Re-simulation throughput against worker count, measured on 16 real games: 162 ticks per second at 1 worker, 612 at 4, 746 at 6, 900 at 8, 954 at 12, 1150 at 16, 1160 at 20. The milestone had assumed saturation at 6 workers; the plateau is in fact between 16 and 20.">
+  <style>
+    .t     { font-family: ui-sans-serif, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+    .m     { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    .title { font-size: 20px; font-weight: 700; fill: #f0efec; }
+    .sub   { font-size: 13.5px; fill: #c3c2b7; }
+    .axis  { font-size: 12px; fill: #8a8a82; }
+    .val   { font-size: 12.5px; font-weight: 700; fill: #f0efec; }
+    .note  { font-size: 12.5px; fill: #c3c2b7; }
+    .foot  { font-size: 11.5px; fill: #8a8a82; }
+  </style>
+
+  <rect x="0" y="0" width="1000" height="470" rx="18" fill="#1a1a19"/>
+
+  <text class="t title" x="40" y="36">The measurement that deleted a milestone</text>
+  <text class="t sub"   x="40" y="58">Re-simulation throughput vs worker count — 16 real games, the same list on every pass</text>
+
+  <!-- grid -->
+  <g stroke="#2e2e2b" stroke-width="1">
+    <line x1="70" y1="70"    x2="880" y2="70"/>
+    <line x1="70" y1="147.5" x2="880" y2="147.5"/>
+    <line x1="70" y1="225"   x2="880" y2="225"/>
+    <line x1="70" y1="302.5" x2="880" y2="302.5"/>
+  </g>
+  <line x1="70" y1="380" x2="880" y2="380" stroke="#4a4a46" stroke-width="1.5"/>
+
+  <g class="t axis" text-anchor="end">
+    <text x="60" y="74">1 200</text>
+    <text x="60" y="151.5">900</text>
+    <text x="60" y="229">600</text>
+    <text x="60" y="306.5">300</text>
+    <text x="60" y="384">0</text>
+  </g>
+  <text class="t axis" x="70" y="22" fill="#8a8a82">ticks / second (whole machine)</text>
+
+  <!-- the refuted hypothesis -->
+  <line x1="283" y1="70" x2="283" y2="380" stroke="#e66767" stroke-width="1.5" stroke-dasharray="4 4" opacity="0.8"/>
+  <text class="t note" x="296" y="276" fill="#e66767">the milestone assumed</text>
+  <text class="t note" x="296" y="293" fill="#e66767">saturation started here</text>
+
+  <!-- the real plateau -->
+  <path d="M709 58 L709 50 L880 50 L880 58" stroke="#199e70" stroke-width="1.5" fill="none"/>
+  <text class="t note" x="794" y="42" text-anchor="middle" fill="#199e70">the real plateau: +0.9%</text>
+
+  <!-- series -->
+  <polyline points="70,338.2 197.9,221.9 283.2,187.3 368.4,147.5 538.9,133.5 709.5,82.9 880,80.3"
+            fill="none" stroke="#3987e5" stroke-width="2.5" stroke-linejoin="round"/>
+  <g fill="#3987e5" stroke="#1a1a19" stroke-width="2">
+    <circle cx="70"    cy="338.2" r="5.5"/>
+    <circle cx="197.9" cy="221.9" r="5.5"/>
+    <circle cx="283.2" cy="187.3" r="5.5"/>
+    <circle cx="368.4" cy="147.5" r="7"/>
+    <circle cx="538.9" cy="133.5" r="5.5"/>
+    <circle cx="709.5" cy="82.9"  r="5.5"/>
+    <circle cx="880"   cy="80.3"  r="5.5"/>
+  </g>
+
+  <!-- selective direct labels -->
+  <text class="t val" x="82"  y="334">162</text>
+  <text class="t val" x="368" y="134" text-anchor="middle">900</text>
+  <text class="t val" x="709" y="68"  text-anchor="middle">1 150</text>
+  <text class="t val" x="880" y="68"  text-anchor="end">1 160</text>
+  <text class="t axis" x="368" y="118" text-anchor="middle" fill="#c98500">the server runs 8</text>
+
+  <!-- x axis -->
+  <g class="t axis" text-anchor="middle">
+    <text x="70"    y="400">1</text>
+    <text x="197.9" y="400">4</text>
+    <text x="283.2" y="400">6</text>
+    <text x="368.4" y="400">8</text>
+    <text x="538.9" y="400">12</text>
+    <text x="709.5" y="400">16</text>
+    <text x="880"   y="400">20</text>
+  </g>
+  <text class="t axis" x="880" y="420" text-anchor="end">workers</text>
+
+  <line x1="40" y1="434" x2="960" y2="434" stroke="#2e2e2b" stroke-width="1"/>
+  <text class="t foot" x="40" y="452">The slowdown blamed on the workers came from a feature shipped in the same run. The milestone closed by deleting its own goal.</text>
+  <text class="t foot" x="40" y="466">Determinism came free: the 8 passes replayed the 307 788 archived rows identically — same counts, same gold and troop sums.</text>
+</svg>
