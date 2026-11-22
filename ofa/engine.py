@@ -23,7 +23,14 @@ NODE = "/usr/bin/node"
 NPM = "/usr/bin/npm"
 # OpenFront exige node >=24.15 <25 avec engine-strict : nvm place parfois un v22 devant
 # dans le PATH, d'ou les chemins absolus et un environnement minimal (ADR-0001).
-ENV = {"PATH": "/usr/bin:/bin:/usr/local/bin", "HOME": str(Path.home())}
+# TMPDIR est la seule variable ajoutee, et il le faut : tsx ecrit son cache dans
+# os.tmpdir(), et un `mkdir /tmp/tsx-1000` echoue dans le sandbox (ENOENT), ce qui fait
+# planter les 514 parties en 9 secondes. Hors sandbox, TMPDIR est absent et /tmp convient.
+ENV = {
+    "PATH": "/usr/bin:/bin:/usr/local/bin",
+    "HOME": str(Path.home()),
+    "TMPDIR": os.environ.get("TMPDIR", "/tmp"),
+}
 
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 

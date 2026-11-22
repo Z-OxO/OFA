@@ -567,7 +567,10 @@ def resim(
             and (commit is None or g["git_commit"] == commit)
             and g["game_id"] not in done
         ]
-        selected.sort(key=lambda g: (g["git_commit"], g["game_id"]))
+        # Par commit (le groupement dont depend `--evict`), puis les PLUS LONGUES d'abord :
+        # une geante qui demarre en dernier laisse 5 workers inoccupes jusqu'au bout. Les
+        # 10 % les plus lentes pesent 28 % du temps total, l'ordre n'est donc pas neutre.
+        selected.sort(key=lambda g: (g["git_commit"], -(g["num_turns"] or 0), g["game_id"]))
         if limit is not None:
             selected = selected[:limit]
         groups = by_commit(selected)
