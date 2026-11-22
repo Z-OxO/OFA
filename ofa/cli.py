@@ -321,7 +321,13 @@ def cmd_analyze(args) -> int:
     root = Path(__file__).resolve().parent.parent
 
     if args.action == "screen":
-        rows = analyze.screen(cfg, phase=args.phase, draws=args.draws, population=args.population)
+        rows = analyze.screen(
+            cfg,
+            phase=args.phase,
+            draws=args.draws,
+            population=args.population,
+            grappe=args.grappe,
+        )
         ajuste = analyze.bh([r["p"] for r in rows if r["p"] is not None])
         it = iter(ajuste)
         for r in rows:
@@ -341,11 +347,30 @@ def cmd_analyze(args) -> int:
                 f"{r['candidat']:<28}{r['resultat']:<18}{r['effet'] or 0:>+10.4f}{ic:>22}"
                 f"{r['p_bh'] or 1:>8.3f}{r['n']:>8}"
             )
-        out = root / "findings" / f"screen-{args.phase}.json"
+        # Le nom porte la population : sinon un criblage Team ecrase celui du FFA (vecu).
+        slug = "".join(c if c.isalnum() else "-" for c in args.population.lower())
+        slug = "-".join(x for x in slug.split("-") if x)
+        out = root / "findings" / f"screen-{args.phase}-{slug}.json"
         out.write_text(json.dumps(rows, ensure_ascii=False, indent=1))
         print(f"\n{len(rows)} mesures ecrites dans {out.relative_to(root)}")
-        neg = [r for r in rows if r["candidat"] == "controle_negatif" and r["signe"] != "nul"]
-        if neg:
+        # Le controle negatif se juge sur ses six tirages : plus d'un non nul pour une meme
+        # mesure (P(>=2) = 3 % si tout va bien) accuse la methode, pas le hasard.
+        alerte = 0
+        for mesure in analyze.OUTCOMES:
+            tirages = [
+                r
+                for r in rows
+                if r["candidat"].startswith("controle_negatif") and r["resultat"] == mesure
+            ]
+            sortis = [r for r in tirages if r["signe"] != "nul"]
+            med = sorted(abs(r["effet"] or 0) for r in tirages)[len(tirages) // 2]
+            print(
+                f"controle negatif / {mesure:<17} {len(sortis)}/{len(tirages)}"
+                f" tirages non nuls, effet median {med:.4f}"
+            )
+            if len(sortis) > 1:
+                alerte += 1
+        if alerte:
             print("ALERTE : le controle negatif n'est pas nul, la methode fabrique de l'effet")
             return 1
         return 0
@@ -494,6 +519,12 @@ def main(argv: list[str] | None = None) -> int:
         "--population", default="mode = 'Free For All'", help="filtre SQL sur games (pour screen)"
     )
     p.add_argument("--draws", type=int, default=1000, help="tirages de bootstrap (defaut 1000)")
+    p.add_argument(
+        "--grappe",
+        default="public_id",
+        help="grappe du bootstrap : public_id en FFA, game_id en Team (les equipiers"
+        " partagent le resultat)",
+    )
     p.add_argument(
         "--force",
         action="store_true",

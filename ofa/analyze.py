@@ -93,10 +93,18 @@ CANDIDATES: dict[str, tuple[str, str]] = {
         "t1",
     ),
     "beaucoup_de_conquetes": ("conquests > median(conquests) over ()", "t0"),
-    # Le controle negatif permanent (ADR-0012) : une moitie de la population tiree au hasard, a
-    # graine fixe. Tout effet non nul ici est un defaut de la methode, pas une tactique.
-    "controle_negatif": ("hash(game_id || small_id::varchar || 'placebo') % 2 = 0", "t0"),
 }
+
+# Le controle negatif permanent (ADR-0012), en SIX tirages et non un seul : avec une centaine de
+# grappes, un placebo unique sort de son IC une fois sur vingt par pur hasard (mesure : la graine
+# `placebo` donnait +0,042 sur `won` en Team, les cinq autres zero). Ce qu'on verifie, c'est donc
+# la DISTRIBUTION des placebos, pas un tirage.
+PLACEBOS = 6
+for _i in range(1, PLACEBOS + 1):
+    CANDIDATES[f"controle_negatif_{_i}"] = (
+        f"hash(game_id || small_id::varchar || 'placebo{_i}') % 2 = 0",
+        "t0",
+    )
 
 STRATES_DEFAUT = ("mode", "tier_rating", "tier_size", "git_commit")
 
@@ -431,7 +439,9 @@ def bh(ps: list[float]) -> list[float]:
     return adj
 
 
-def screen(cfg: Config, *, phase: str, draws: int, population: str) -> list[dict]:
+def screen(
+    cfg: Config, *, phase: str, draws: int, population: str, grappe: str = "public_id"
+) -> list[dict]:
     """Criblage : tous les candidats x toutes les mesures, sur l'EXPLORATION seule.
 
     Aucune fiche, aucune p-valeur publiable : le produit est une liste d'hypotheses a
@@ -450,7 +460,7 @@ def screen(cfg: Config, *, phase: str, draws: int, population: str) -> list[dict
                 con,
                 comportement=sql,
                 resultat=resultat,
-                grappe="public_id",
+                grappe=grappe,
                 strates=strates,
                 draws=draws,
             )
