@@ -13,7 +13,7 @@ Spec : docs/SPEC.md (lis seulement la section du jalon en cours). Avancement : d
 ## Architecture (ne change pas sans ADR)
 - data/raw/ ne se modifie jamais (records zstd tels que reçus) ; tout le reste se reconstruit à partir de lui.
 - Parquet = source de vérité ; le site le lit en lecture seule.
-- Tout appel à l'API OpenFront passe par ofa/ingest/client.py (débit limité). Aucun autre chemin.
+- Tout appel à l'API OpenFront passe par ofa/client.py (débit limité). Aucun autre chemin.
 - TypeScript uniquement dans resim/. data/openfront/ = clone de référence, lecture seule.
 
 ## Règles
@@ -28,5 +28,10 @@ Spec : docs/SPEC.md (lis seulement la section du jalon en cours). Avancement : d
 - Les stats sont des bigint sérialisés en chaînes : les convertir en int Python, jamais en float.
 - publicID peut être null ou "REDACTED".
 - 1 tick = 100 ms. Le moteur n'est déterministe qu'au gitCommit du record.
-- api.openfront.io/game/<id> (sans /public) est bloqué par Cloudflare.
+- On passe toujours par /public/ : c'est le chemin documenté et stable. (Le blocage Cloudflare de /game/<id> sans /public est RÉFUTÉ : HTTP 200 mesuré au J0, RECON.md fait 7.)
 - Environnement : WSL2 Ubuntu, projet dans le système de fichiers Linux (~/ofa), jamais sous /mnt/c (lent).
+- Sandbox : data/raw/ est en lecture seule (voulu, J1 : la collecte tourne hors session) et `git worktree add`/`npm ci` échouent sur .git. Ces commandes, c'est à l'utilisateur de les lancer : demande-les-lui avec `! <commande>`.
+- Le hook rtk résume la sortie de pytest et affiche « No tests collected » même quand tout passe : pour la vraie sortie, `rtk proxy "uv run pytest -q -m 'not slow and not network'"`. Il tronque aussi à 50 lignes, donc tout comptage vient d'un `count`, jamais de `| wc -l`.
+- multiprocessing : Python 3.14 démarre en forkserver, dont le socket est refusé par le sandbox. Passe `mp_context=multiprocessing.get_context("fork")`.
+- Le CLI `tsx` plante dans le sandbox (listen EPERM sur son pipe IPC) : `node --import tsx`.
+- `ofa rate-check` lit tout le journal, sans fenêtre : pour vérifier une seule exécution, filtrer les lignes à la main (les requêtes de `fetch-full` sont les `/game/<id>` SANS `?turns=false`).
