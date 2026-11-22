@@ -15,6 +15,10 @@ Spec : docs/SPEC.md (lis seulement la section du jalon en cours). Avancement : d
 - `uv run ofa resim --report` : le tableau d'acceptation du J3, par cause
 - `uv run ofa resim --watch` : barre de progression, dans un AUTRE shell pendant que la
   re-sim tourne (elle relit la table `resim`, en WAL ; rien n'est instrumenté dans la re-sim)
+- `uv run ofa analyze screen --phase ouverture|milieu|fin [--population "<SQL>"] [--grappe game_id]` :
+  le criblage, sur l'exploration SEULE. Sortie dans `findings/screen-<phase>-<population>.json`
+- `uv run ofa analyze explore|confirm|card <id>` : une hypothèse pré-inscrite, puis sa fiche
+- `uv run ofa analyze report` : le journal des lectures de confirmation
 - `duckdb -c "select count(*) from 'data/parquet/games/**/*.parquet'"` : requêtes ponctuelles
 
 ## Architecture (ne change pas sans ADR)
@@ -53,4 +57,16 @@ Spec : docs/SPEC.md (lis seulement la section du jalon en cours). Avancement : d
 - Le CLI `tsx` plante dans le sandbox (listen EPERM sur son pipe IPC) : `node --import tsx`.
 - Le limiteur de débit vit dans le processus : deux `ofa` qui appellent l'API en parallèle font
   deux fois le débit configuré, sans alerte. Un seul à la fois.
+- Analyse (J5) : les fenêtres sont en **multiples de 10 ticks**, parce que l'état n'est
+  échantillonné que là. L'ouverture part donc de **210** et non de 202 (`spawn_phase_end`) : une
+  fenêtre à 202 ne joint RIEN, et une garde refuse maintenant un t0 ou t1 hors grille.
+- Analyse : toute fenêtre SQL qui classe (`ntile`, `row_number`, `rank`) doit **départager ses ex
+  æquo explicitement**, sinon l'ordre de lecture des Parquet change le résultat d'une exécution à
+  l'autre (vécu : −0,05504 / −0,05298 / −0,05285 pour la même commande). Et le bootstrap tire par
+  `hash(...)`, jamais par `random()`, qui ne consomme pas sa graine dans l'ordre sous parallélisme.
+- Analyse : `confirm` n'ouvre l'échantillon réservé qu'**une fois par hypothèse**, et ce n'est pas
+  contournable depuis la CLI. `--force` ne lève que le garde de puissance (effet sous le MDE).
+  Pour re-tester, il faut un nouvel id.
+- `fetch-full` plafonne à **1,4 req/s** quel que soit `OFA_RATE` : sa boucle est séquentielle, son
+  débit est l'inverse de la latence. Ne jamais estimer sa durée en divisant par le débit configuré.
 - `ofa rate-check` lit tout le journal, sans fenêtre : pour vérifier une seule exécution, filtrer les lignes à la main (les requêtes de `fetch-full` sont les `/game/<id>` SANS `?turns=false`).

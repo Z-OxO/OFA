@@ -56,9 +56,14 @@ Et deux gardes :
 - **la lecture unique de confirmation ne se gaspille pas** : `explore` rapporte l'**effet minimal
   détectable** (2,8 × l'écart-type bootstrap, ~80 % de puissance). Sous ce seuil, l'hypothèse est
   classée « sous-puissante » et `confirm` refuse d'ouvrir l'échantillon ;
-- **un contrôle négatif permanent** : un comportement factice à graine fixe traverse tout le
-  pipeline à chaque lot et doit rendre un effet nul. Les tests synthétiques de la SPEC disent que la
-  méthode *peut* voir ; le contrôle négatif dit qu'elle ne *fabrique* pas.
+- **un contrôle négatif permanent, en SIX tirages** : un comportement factice à graine fixe
+  traverse tout le pipeline à chaque lot et doit rendre un effet nul. Les tests synthétiques de la
+  SPEC disent que la méthode *peut* voir ; le contrôle négatif dit qu'elle ne *fabrique* pas.
+  **Six tirages et non un seul**, et c'est une correction imposée par la mesure : la première
+  version en tirait un, qui a « trouvé » +4,2 points de victoire d'équipe à p = 0,003. Les cinq
+  autres graines rendent zéro. Avec une centaine de grappes, un placebo unique sort de son
+  intervalle une fois sur vingt par pur hasard — ce qu'on vérifie est donc la *distribution* des
+  placebos, et l'alerte ne sonne qu'au-delà d'un tirage non nul pour une même mesure (P(≥2) = 3 %).
 
 ## L'estimateur
 
@@ -77,6 +82,32 @@ usage de lecture annoncé au J4), `pyyaml` (les pré-inscriptions), `jsonschema`
 `t0` et `t1`, construit à la demande la table de sujets `(partie, joueur)` — identité, `rating_before`,
 état à t0 **et** à t1, agrégats de la fenêtre, contexte de voisinage, et les quatre résultats. Rien
 à invalider, rien à reconstruire, rien à transporter.
+
+## Reproductibilité : trois sources éliminées, et la quatrième est irréductible
+
+Un chiffre qui change d'une exécution à l'autre n'est pas vérifiable, donc sans valeur. La fiche de
+rodage a rendu deux valeurs différentes pour un calcul identique, et la **même commande** a rendu
+−0,05504, puis −0,05298, puis −0,05285. Trois causes, toutes corrigées :
+
+1. **`ntile` tranchait ses ex æquo dans l'ordre de lecture des Parquet** — et des milliers de
+   joueurs sont exactement à 1500, l'a priori du rating. Les trois fenêtres de tranche portent
+   désormais un départage explicite (`order by valeur, game_id, small_id`).
+2. **Le rang final utilisait `row_number()` sur un classement à ex æquo**, alors que deux joueurs
+   éliminés au même tick *partagent* leur position (docs/DATA.md). C'est `rank()` : à la fois plus
+   juste et stable.
+3. **Le bootstrap tirait avec `random()` dans une requête parallélisée**, qui ne consomme pas sa
+   graine dans un ordre stable, et numérotait ses grappes avec un `row_number() over ()` sans
+   `ORDER BY`. Le tirage vient maintenant d'un `hash(tirage, rang, graine)`, déterministe et
+   insensible au parallélisme.
+
+Après correction : trois exécutions, checksums de la table de sujets identiques, effet identique à
+**1e-9** près. Le résidu est à la 16e décimale — l'addition flottante en parallèle n'est pas
+associative — et le test de non-régression l'écrit au lieu d'exiger une égalité au bit près.
+
+**Et une distinction qui n'en est pas une seule** : `joueurs` comptait les grappes. En Team, où la
+grappe est la partie, 102 parties passaient pour 102 joueurs face à un seuil de la SPEC qui en
+exige 100. Les deux sont comptés séparément : la mesure Team porte 3 337 joueurs et **102 grappes**,
+et c'est le second chiffre qui fait la largeur de l'intervalle.
 
 ## Ce qui ne pourra jamais émerger de ces données
 

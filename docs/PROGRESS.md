@@ -768,3 +768,150 @@ reprendre si une mesure montre un jour qu'elles bloquent quelque chose de réel.
   points que le banc ne couvre pas.
 - `docs/PERF.md` annonçait **7 Go de RAM** en local depuis le J0 : la machine en a **15,7**. Sur
   les deux machines, ce sont les cœurs qui plafonnent, pas la RAM.
+
+---
+
+## J5 — Moteur d'analyse (le moteur est livré ; les fiches attendent la densité)
+
+Deux critères d'acceptation sur trois sont atteints. Le troisième — dix fiches réelles relues par
+`stats-reviewer` — est **volontairement en attente** : une lecture de confirmation se dépense une
+seule fois par hypothèse, et l'ouvrir sur les 131 parties de confirmation d'aujourd'hui nous
+coûterait les douze hypothèses pour un plafond de preuve B. Décision de l'utilisateur, prise en
+connaissance du calendrier.
+
+### Ce que la mesure a dit avant la première ligne de code
+
+| fait mesuré sur les 513 parties | conséquence |
+| --- | --- |
+| `spawn_phase_end` vaut **202** sur les 513 | un repère constant : des fenêtres en ticks absolus sont comparables d'une partie à l'autre |
+| durée : 4 922 → 17 218 ticks (D1/D9), et elle **dépend du résultat** | une phase définie en % de durée ferait fuir le futur dans la définition du comportement |
+| avant le tick 1800 : **97,8 %** ont attaqué un humain, **98,7 %** la terre neutre | « attaquer tôt » n'est pas un comportement : c'est le jeu. Le criblage binaire est réfuté |
+| avant 1800 : **76,3 %** une ville, **50,3 %** une demande d'alliance | ces deux-là coupent la population ; l'alliance est le contraste idéal |
+| au tick 1800 (D1→D9) : attaques 12→48, tuiles 8 727→49 187, troupes/tuile 11→59, voisins 2→8 | la **dose** varie d'un facteur 4 à 6 : les tactiques vivent là, pas dans des booléens |
+| 20 465 humains : 14 240 avec `death_position`, 5 701 vivants à la fin | les quatre mesures de résultat de la SPEC sont disponibles |
+
+### Le trou de conception, trouvé en revue de design
+
+Un protocole pré-inscrit ne **découvre** rien, il juge. Si les hypothèses écrites à la main sont
+tièdes, le jalon livre douze fiches tièdes et aucune tactique. D'où `ofa analyze screen` : 24
+comportements candidats × 4 mesures de résultat sur l'**exploration seule**, classés par taille
+d'effet, sans aucune p-valeur publiable. Son unique produit est la liste des hypothèses qui
+méritent une pré-inscription. C'est l'étage qui fait émerger ; les autres ne font que valider.
+
+### Code
+
+| Module | Rôle |
+| --- | --- |
+| `ofa/analyze.py` (856 lignes) | table de sujets paramétrée par la fenêtre, estimateur, bootstrap, criblage, pré-inscriptions, fiches |
+| `ofa/cli.py` | `ofa analyze screen\|explore\|confirm\|card\|report` |
+| `findings/card.schema.json` | le schéma de fiche de la SPEC, validé par `jsonschema` |
+| `findings/prereg/*.yaml` | 12 hypothèses + 1 rodage, commitées **avant** toute confirmation |
+| `tests/test_analyze.py` | 8 tests de méthode |
+| `docs/adr/0012-moteur-analyse.md` | le criblage, les quatre pièges, la reproductibilité, ce qui ne pourra jamais émerger |
+
+`uv run pytest -q -m "not slow and not network"` : **98 tests, 16,8 s**. `ruff` propre.
+Trois dépendances ajoutées : `duckdb` (le vrai usage de lecture annoncé au J4), `pyyaml`,
+`jsonschema`. **Ni numpy ni pandas** : le bootstrap tourne en SQL.
+
+### L'estimateur, et les quatre pièges qu'il traite
+
+Standardisation directe sur strates, poids ATT, IC et p par **bootstrap de grappes sur
+`public_id`** (la partie en Team, où les équipiers partagent le résultat). 0,2 s par mesure.
+
+1. **Fenêtres en ticks absolus** (ouverture 210–1800, milieu 1800–6000, fin 6000+), jamais en
+   fraction de durée.
+2. **Point de contrôle déclaré** : `t0` pour une dose — stratifier sur l'état à t1 annulerait
+   l'effet dont t1 *est* la conséquence —, `t1` pour un choix à position égale.
+3. **Contexte de voisinage obligatoire** : terre libre (`borders` à `b = 0`), force des voisins
+   humains, exposition, `spawn_shore`, map, taille. Sans eux, une fiche décrit un quartier.
+4. **`git_commit` dans les strates** : l'équilibrage bouge (6 versions en 7 jours).
+
+Plus les attaques **subies** pendant la fenêtre, ajoutées après coup parce qu'un résultat l'exigeait
+(ci-dessous), et deux gardes : l'effet minimal détectable calculé à l'exploration (`confirm` refuse
+une hypothèse sous-puissante) et le contrôle négatif à six tirages.
+
+### Les mesures
+
+**Le contrôle négatif est nul** : 0/6 tirages non nuls sur 11 des 12 combinaisons
+(phase × mesure, FFA ouverture et milieu), 1/6 sur la douzième — exactement le taux attendu d'une
+méthode qui ne fabrique rien.
+
+Les tests de méthode : effet planté de +0,10 retrouvé à **±0,02** ; effet dû au seul niveau
+**rejeté** (IC contenant 0) alors que l'association brute vaut **+0,4** ; grappe par joueur plus
+large que grappe par ligne quand le comportement est une habitude ; strate à bras unique écartée.
+
+Les douze hypothèses pré-inscrites, sur l'exploration (toutes dans le sens attendu) :
+
+| hypothèse | effet | IC 95 % | n | joueurs/grappes |
+| --- | --- | --- | --- | --- |
+| `alliance-ouverture-team` | **−0,1358** victoire | [−0,163 ; −0,082] | 3 623 | 3 337 / **102** |
+| `navire-ouverture-ffa` | −0,1079 rang | [−0,137 ; −0,077] | 8 162 | 7 338 |
+| `ville-tot-ffa` | −0,0742 rang | [−0,086 ; −0,062] | 8 623 | 7 725 |
+| `alliance-milieu-ffa` | −0,0709 rang | [−0,087 ; −0,042] | 3 280 | 3 097 |
+| `trahison-ouverture-ffa` | +0,0713 rang | [+0,041 ; +0,103] | 7 936 | 7 173 |
+| `port-ouverture-ffa` | −0,0666 rang | [−0,079 ; −0,056] | 8 626 | 7 731 |
+| `transports-milieu-ffa` | −0,0654 rang | [−0,077 ; −0,055] | 3 315 | 3 123 |
+| `alliance-ouverture-ffa` | −0,0558 rang | [−0,067 ; −0,045] | 8 630 | 7 731 |
+| `or-garde-milieu-ffa` | −0,0441 rang | [−0,056 ; −0,032] | 3 333 | 3 142 |
+| `trahison-milieu-ffa` | −0,0180 rang | [−0,029 ; −0,007] | 3 312 | 3 124 |
+| `defenses-ouverture-ffa` | **−746 ticks** | [−962 ; −534] | 8 526 | 7 643 |
+| `attaque-humain-tot-ffa` | −420 ticks | [−599 ; −244] | 8 570 | 7 679 |
+
+Trois sont **fragiles pour la confirmation** d'aujourd'hui (effet sous 1,7 × le MDE de
+l'exploration) : les deux trahisons et l'attaque humaine précoce. C'est écrit dans leur
+pré-inscription.
+
+### Le résultat qui a imposé une colonne
+
+En Team, demander une alliance en ouverture va avec **−13,6 points de victoire d'équipe**, quand la
+même chose en FFA *améliore* le rang. Premier soupçon : la causalité inverse — on demande une
+alliance parce qu'on est attaqué — et le contrôle à t0 ne peut pas la voir, puisque le déclencheur
+arrive dans la fenêtre. La table de sujets porte donc les **attaques subies pendant la fenêtre** et
+une strate de pression. Mesuré : l'effet ne bouge pas (Team −0,1385 → −0,1433 ; FFA −0,0539 →
+−0,0550). Le renversement tient, et son explication reste à trouver.
+
+### Trois sources de non-reproductibilité, et une irréductible
+
+La **même commande** rendait −0,05504, puis −0,05298, puis −0,05285. Détail dans l'ADR-0012 :
+`ntile` tranchait ses ex æquo dans l'ordre de lecture des Parquet (des milliers de joueurs sont
+exactement à 1500) ; le rang final utilisait `row_number()` sur un classement **à ex æquo** ; le
+bootstrap tirait par `random()` dans une requête parallélisée et numérotait ses grappes sans
+`ORDER BY`. Après correction : checksums identiques, effet identique à **1e-9** près, test de
+non-régression. Le résidu est à la 16e décimale, et c'est l'addition flottante en parallèle.
+
+### Les pièges de méthode, dont un de ma part
+
+1. **Un placebo unique crie au loup.** Le garde-fou a « trouvé » +4,2 points de victoire d'équipe,
+   p = 0,003. Cinq autres graines : zéro. Avec ~100 grappes, un placebo sort de son intervalle une
+   fois sur vingt. Ce n'est pas la méthode qui fabriquait, c'est le test qui n'avait pas la bonne
+   unité — il porte six tirages maintenant.
+2. **Une fenêtre qui ne joint rien.** `spawn_phase_end` vaut 202, l'état est échantillonné tous les
+   10 ticks : la fenêtre partant de 202 ramenait **0 sujet**. Le correctif d'une ligne n'est pas
+   l'important ; la garde qui refuse une fenêtre hors grille l'est.
+3. **`--force` contournait les deux gardes**, dont la lecture unique. Il ne lève plus que la
+   puissance ; la règle d'une lecture par hypothèse n'est plus contournable depuis la CLI.
+4. **Mes deux tests de robustesse étaient le même run** étiqueté deux fois : `alt` changeait la
+   définition et la fenêtre ensemble. Deux leviers séparés désormais.
+5. **`joueurs` comptait les grappes** : en Team, 102 parties passaient pour 102 joueurs face à un
+   seuil qui en exige 100. Les deux sont comptés séparément.
+6. **Mon estimation de collecte était fausse d'un facteur 6** : 1 h 40 annoncée, **9 h 24** mesurée
+   pour 48 100 records. `fetch_full` est une boucle séquentielle, son débit est l'inverse de la
+   latence (1,4 req/s) et `OFA_RATE` n'y change rien. La paralléliser est écartée faute de besoin :
+   la re-sim dure des jours et tourne en même temps.
+
+### Ce qui reste ouvert
+
+- **Les 12 confirmations, les 12 fiches et leurs relectures** : ils attendent ~10 000 parties
+  re-simulées, pour que le niveau A soit possible (cohérence par map, par tranche de niveau, et
+  joueur contre lui-même — ce dernier n'existe qu'avec un échantillon dense).
+- **La campagne tourne sur le serveur** depuis le 2026-11-22 21h03 : `fetch-full` des 48 100
+  records du périmètre (1,4 req/s), puis `normalize` → `rating` → `engines` → `resim --evict` dès
+  12 000 records, la re-sim n'attendant pas la fin de la collecte.
+- Les trois fichiers `findings/screen-*.json` datent d'**avant** les corrections de reproductibilité
+  et seront regénérés une seule fois, à la clôture, avec les nouvelles parties.
+- `findings/reads.jsonl` porte **une** ligne, celle du rodage (`rodage-attaques-ouverture`, une
+  dose volontairement non actionnable, dont la lecture a servi à éprouver la chaîne de bout en
+  bout). Les douze vraies hypothèses n'ont pas été lues.
+- **Le renversement Team/FFA de l'alliance n'a pas d'explication mécanique** : hypothèse non
+  testée, les équipiers étant déjà alliés par construction, demander une alliance en Team signifie
+  la demander **hors de son équipe**.
