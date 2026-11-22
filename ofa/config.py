@@ -16,6 +16,18 @@ ARCHIVE_START = "2025-09-12"
 # exclus à l'analyse.
 RANKED_TYPES = ("unranked", "2v2")
 
+# Le niveau (J4, ADR-0010). Pas d'apprentissage et demi-vie mesures sur la seule fenetre
+# d'exploration (grille dans l'ADR) : le plateau est large, 0,636 de log-loss a lr0 = 0,2.
+RATING_LR0 = 0.2
+RATING_HALFLIFE = 20.0
+RATING_START = 1500.0
+RATING_SCALE = 400.0 / 2.302585092994046  # 400 / ln 10 : theta -> echelle Elo
+
+# La coupure du protocole (SPEC § Rigueur) : l'exploration avant, la confirmation apres, lue
+# une seule fois par hypothese. DEPLACER CETTE DATE INVALIDE TOUTE CONFIRMATION PASSEE.
+# Mesure au 2026-11-22 : 36 397 parties du perimetre avant, 11 703 apres.
+CONFIRMATION_START = "2026-11-20T00:00:00+00:00"
+
 
 def _env_int(name: str, default: int) -> int:
     return int(os.environ.get(name, default))

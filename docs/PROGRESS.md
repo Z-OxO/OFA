@@ -8,7 +8,7 @@ Spec : [docs/SPEC.md](SPEC.md). Décisions : [docs/adr/](adr/). Perf : [docs/PER
 | J1 Ingestion | **terminé** — les 5 critères atteints | 2026-11-21 |
 | J2 Normalisation | **terminé** | 2026-11-22 |
 | J3 Re-simulation | **terminé** — 513/514 parties valides (99,81 %) | 2026-11-22 |
-| J4 Niveau | à faire | |
+| J4 Niveau | **terminé** — log-loss 0,637 contre 0,693, Spearman 0,311 | 2026-11-22 |
 | J5 Moteur d'analyse | à faire | |
 | J6 Site web | à faire | |
 | J7 Mes parties | à faire | |
@@ -495,3 +495,123 @@ archivées pendant la partie :
   « entre humains ».
 - Projection de stockage à corriger dans `RECON.md` § 10.3 : **32 Go** pour 100 000 parties
   re-simulées, et non 17,1 Go (total projeté ~86 Go sur 100).
+
+---
+
+## J4 — Niveau (terminé)
+
+Le niveau n'est pas une fin : c'est le contrôle que la SPEC impose pour qu'une fiche tactique du
+J5 ne confonde pas « ce comportement fait gagner » avec « les bons joueurs ont ce comportement ».
+Le J4 livre donc **une colonne et rien de plus** : `rating_before`, le niveau d'avant-partie de
+chaque (partie, joueur).
+
+### Code
+
+| Module | Rôle |
+| --- | --- |
+| `ofa/rating.py` | le classement d'une partie, le gradient de Plackett-Luce, la passe chronologique, les métriques |
+| `ofa/config.py` | `RATING_LR0`, `RATING_HALFLIFE`, l'échelle Elo, et `CONFIRMATION_START` — la coupure du protocole |
+| `ofa/cli.py` | `ofa rating`, `ofa rating --report` |
+| `docs/adr/0010-rating-chronologique.md` | les trois arbitrages (résultat, modèle, rangement), chiffrés |
+
+`uv run pytest -q -m "not slow and not network"` : **88 tests, 11,0 s** (66 des J1-J3 + 22 du J4).
+`ruff check` propre. **Aucune dépendance ajoutée** — ni numpy, ni polars.
+
+### Critères d'acceptation : les 2 atteints
+
+`uv run ofa rating --report`, sur l'échantillon de confirmation (depuis le 2026-11-20, 11 703
+parties, **lu une seule fois**) :
+
+| mode | ≥ n parties | parties | joueurs | paires | log-loss | naïf | Spearman | expérience |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| FFA | 0 | 8 245 | 70 805 | 8 118 522 | **0,6316** | 0,6931 | **0,373** | 0,122 |
+| FFA | 10 | 8 048 | 24 535 | 3 075 856 | **0,6200** | 0,6931 | **0,402** | 0,015 |
+| Team | 0 | 3 224 | 37 893 | 1 122 403 | 0,6739 | 0,6931 | 0,153 | 0,076 |
+| Team | 10 | 3 122 | 13 503 | 377 675 | 0,6666 | 0,6931 | 0,165 | 0,036 |
+| **tous** | **0** | **11 469** | **94 055** | **9 240 925** | **0,6367** | 0,6931 | **0,311** | 0,109 |
+| tous | 10 | 11 170 | 30 521 | 3 453 531 | 0,6251 | 0,6931 | 0,336 | 0,021 |
+
+**Deux références naïves, pas une.** « Naïf » = aucune information (tous égaux, p = 0,5,
+log-loss ln 2). « Expérience » = le nombre de parties déjà jouées, en corrélation de rang : c'est
+elle qui compte, parce que sans elle un rating qui ne mesurerait que l'ancienneté passerait pour un
+rating. Le rating la bat d'un facteur 3 (0,311 contre 0,109) et l'écart **grandit** quand on exige
+plus de parties antérieures, alors que celui de l'expérience **s'effondre** (0,015 à ≥ 10) —
+exactement ce qu'on attend si le rating mesure le niveau et non l'assiduité.
+
+| Critère | Preuve |
+| --- | --- |
+| Le rating d'avant-partie prédit le classement mieux qu'une référence naïve | log-loss **0,6367 contre 0,6931** (−8,1 %) et Spearman **0,311 contre 0,109**, sur 9,24 M de paires et 11 469 parties de confirmation |
+| Les joueurs sans publicID sont traités explicitement | ils **jouent sans capitaliser** : comptés dans la normalisation (sinon la taille du terrain est fausse et tous les autres sont mal notés), restés à l'a priori, sans ligne ni mémoire. 244 participations anonymes, 0 ligne. Trois tests sur de vraies fixtures : la partie entièrement anonyme n'écrit rien, `REDACTED` n'a pas de ligne mais compte dans `field_size`, et retirer un anonyme **change** le gradient des autres |
+
+### Deux contre-épreuves indépendantes du code de `ofa`
+
+1. **Le premier du classement est-il le vainqueur archivé ?** `rank = 1` sur les FFA du périmètre à
+   vainqueur joueur : **34 359 lignes, 34 359 fois le joueur `won`**. Le classement est calculé sans
+   lire `won` (ADR-0010) : c'est donc une vraie vérification, pas une tautologie.
+2. **Le chaînage temporel** : `rating_after` d'une partie = `rating_before` de la suivante pour le
+   même joueur, et `games_before` s'incrémente de 1. **1 426 259 transitions, 0 rupture** des deux.
+   C'est la preuve que le rating écrit est bien celui d'**avant** la partie.
+
+Et, en SQL pur, le niveau d'avant-partie décroît **strictement** avec le classement final en FFA,
+par décile : **1 577 → 1 478** points d'Elo. En Team ce test est muet par construction (deux rangs
+seulement) : le signal Team se lit dans le tableau ci-dessus, et il est trois fois plus faible.
+
+### Mesures
+
+| Mesure | Valeur |
+| --- | --- |
+| Passe complète | **14,3 s** pour 48 100 parties — 3 360 parties/s sur un cœur |
+| Pic RSS | **1,33 Go** (un mois de partition en mémoire) |
+| Sortie | **1 684 613 lignes, 20,7 Mo** (12,3 o/ligne), **258 354 joueurs** |
+| Parties sans classement exploitable | **728 / 48 100** (1,5 %) : un seul groupe, ou Team sans vainqueur archivé |
+| Étendue du rating | 1 194,9 à 2 138,2, moyenne **1 511,15** (un rating à somme nulle reste près de son a priori) |
+| Rapport d'acceptation | 27,9 s, 9,24 M de paires |
+
+### Décisions (ADR-0010)
+
+- **Le classement sort des tables du J2, pas de la re-sim.** Mesuré : un participant FFA est dans
+  exactement un de trois états (vivant à la fin / mort / sans stats), et le vainqueur est l'argmax
+  de `final_tiles` **34 380 fois sur 34 380**. `death_position` du J3 serait plus précis, mais sur
+  513 parties au lieu de 48 100. Les 7,2 % **sans stats sont hors classement** : les placer derniers
+  inventerait une défaite à quelqu'un qui a surtout perdu sa connexion.
+- **Plackett-Luce en ligne, pas d'Elo par paires.** Le gradient est O(n) par partie au lieu de
+  O(n²) : **113 M de mises à jour au lieu de 1,4 milliard** sur l'archive projetée du serveur. Et
+  sur deux joueurs il redonne exactement l'Elo par paire (testé), donc on ne perd rien à l'échanger.
+- **Aucune dépendance ajoutée.** Un rating chronologique ne se vectorise pas entre parties ; une
+  fois le O(n²) écarté, Python pur suffit (14 s). Polars et DuckDB attendent un vrai usage de
+  lecture (J5/J6).
+- **Pas d'apprentissage réglé sur l'exploration seule**, grille dans l'ADR : le plateau est large
+  (0,636 de log-loss de lr0 = 0,2 à 0,4), mais la **décroissance** du pas compte (0,688 sans elle).
+  D'où deux constantes figées et **aucune commande de calibration** à maintenir.
+- **`data/rating/`, sa propre racine, reconstruction totale.** Jamais sous `data/parquet/`, que
+  `normalize` échange en bloc ; et contrairement à `data/resim/`, pas d'incrémental : 14 s de calcul
+  se jettent, et une purge de compte doit pouvoir réécrire toute l'histoire.
+- **Un seul rating, tous modes confondus**, échelle Elo (1500 + 173,7 · θ) pour que le J6 affiche
+  un nombre lisible. Si Team décroche trop, c'est la clé du dictionnaire qui devient
+  `(public_id, mode)` — une ligne. Mesuré : Team est plus faible mais bat les deux références.
+- **Coupure du protocole : `CONFIRMATION_START = 2026-11-20T00:00:00Z`** (36 397 parties avant,
+  11 703 après). Le pas a été réglé en deçà, la confirmation n'a été lue qu'une fois. **Déplacer
+  cette date invalide toute confirmation passée** : c'est écrit dans l'ADR et dans `config.py`.
+
+### Un piège trouvé en route
+
+`month` était à la fois une colonne du fichier et la clé de partition Hive : pyarrow refuse de
+relire la table (`string vs dictionary`). Les tables du J2 et du J3 ne stockent `month` que dans le
+chemin — la règle valait aussi ici.
+
+### Ce qui reste ouvert pour la suite
+
+- **7 jours d'archive, donc des ratings à peine chauds** : médiane de **1 partie** par joueur
+  (258 354 joueurs, 6,5 parties en moyenne, 45 494 joueurs à ≥ 10 parties, 420 au maximum).
+  C'est pour ça que le rapport est ventilé par `games_before`, et aussi pourquoi il **s'améliore**
+  quand on monte le seuil.
+  Le serveur (ADR-0009) porte l'archive longue : le J4 local est la répétition en costume.
+- **En Team, le rating est celui de l'équipe** : un passager est surévalué (Spearman 0,16 contre
+  0,37 en FFA). Les équipes des perdants sont inconnues sans re-sim des 12 965 parties Team.
+- **Le pic mémoire est la seule limite d'échelle** : ~5 Go projetés pour un mois complet du serveur.
+  Le découpage par jour est décrit en `shortcut:` dans `ofa/rating.py` ; le modèle n'a pas à changer.
+- **Pas d'incertitude par joueur** (σ à la TrueSkill) : `games_before` est le seul indicateur de
+  fiabilité. Le J5 s'en servira pour écarter les débutants plutôt que pour pondérer.
+- Ce que le J5 a maintenant en main : `rating_before` pour « à niveau égal », les trajectoires du
+  J3 pour « à état égal à t1 », `games` pour le contexte, et `public_id` pour comparer un joueur
+  avec lui-même. Les quatre contrôles de la SPEC sont couverts.

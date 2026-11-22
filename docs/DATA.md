@@ -399,3 +399,62 @@ zstd -dc data/raw/meta/cp/cPaLHdRvC2.json.zst \
 duckdb -c "select client_id, gold_work, gold_war, peak_troops
            from 'data/parquet/participants/**/*.parquet' where game_id='cPaLHdRvC2'"
 ```
+
+---
+
+# `ratings` — le niveau (J4) — `data/rating/`
+
+Une ligne par (partie, joueur identifié classé) : **1 684 613 lignes, 20,7 Mo** pour les 48 100
+parties du périmètre (7 jours, mesuré le 2026-11-22). Elle ne vient ni du brut ni du moteur : c'est
+une passe chronologique sur `games` × `participants` (ADR-0010).
+
+```bash
+uv run ofa rating            # la passe complete : 14,3 s, reconstruit tout
+uv run ofa rating --report   # l'acceptation sur l'echantillon de confirmation
+duckdb -c "select count(*) from 'data/rating/**/*.parquet'"
+```
+
+| colonne | type | note |
+| --- | --- | --- |
+| `game_id` | str | clé avec `public_id` (unicité vérifiée sur les 1 684 613 lignes) |
+| `public_id` | str | jamais nul, jamais `REDACTED` : un joueur sans identité n'a pas de ligne |
+| `rating_before` | f32 | **le niveau d'AVANT la partie**, échelle Elo (a priori 1500). La seule colonne qu'une analyse doit lire : elle ne contient rien de ce qui s'est passé dans la partie |
+| `rating_after` | f32 | après mise à jour. Redondant avec le `rating_before` de la partie suivante — sauf pour la dernière partie d'un joueur, c'est-à-dire son niveau courant |
+| `games_before` | i32 | parties déjà notées. **Le seul indicateur de fiabilité** : il n'y a pas d'incertitude par joueur |
+| `rank` | i32 | rang de compétition dans la partie : 1 + le nombre de joueurs strictement devant. En Team il ne vaut que 1 ou 1 + (taille de l'équipe gagnante) |
+| `field_size` | i32 | participants classés, **anonymes compris** |
+| `month` | partition | clé de partition, pas une colonne du fichier (comme au J2 et au J3) |
+
+Mesuré : rating de **1 194,9 à 2 138,2**, moyenne 1 511,15 (un rating à somme nulle reste autour de
+son a priori), **258 354 joueurs**.
+
+## Ce que cette table ne dit pas
+
+- **Elle ne classe pas tout le monde.** 728 parties sur 48 100 n'ont pas de classement exploitable
+  (un seul groupe, ou Team sans vainqueur archivé) ; les participants sans stats (7,2 % en FFA)
+  sont hors classement ; les 244 participations anonymes ne capitalisent rien. Une partie absente
+  d'ici a quand même sa ligne dans `games`.
+- **En Team, le niveau est celui de l'équipe** : un passager est surévalué, et le test par décile
+  de classement y est muet par construction (deux rangs seulement). Le signal Team se lit dans le
+  rapport d'acceptation, pas dans un décile.
+- **Pas de tranches de niveau** : l'analyse les découpe au moment où elle sait combien il lui en
+  faut (`ntile(...) over (order by rating_before)`).
+
+## Vérifier soi-même (indépendamment du code de `ofa`)
+
+```bash
+# le premier du classement est-il bien le vainqueur archive ? -> 34 359 / 34 359
+duckdb -c "with r as (select * from 'data/rating/**/*.parquet'),
+  p as (select game_id, public_id, won from 'data/parquet/participants/**/*.parquet'),
+  g as (select game_id from 'data/parquet/games/**/*.parquet'
+        where in_scope and mode='Free For All' and winner_kind='player')
+select count(*), sum(p.won::int) from r join g using(game_id)
+ join p using(game_id, public_id) where r.rank=1"
+
+# le niveau d'avant-partie decroit-il avec le classement final ? (FFA) -> 1577 -> 1478
+duckdb -c "with g as (select game_id, mode from 'data/parquet/games/**/*.parquet' where in_scope),
+  r as (select r.rating_before, r.rank, r.field_size from 'data/rating/**/*.parquet' r
+        join g using(game_id) where g.mode='Free For All'),
+  d as (select rating_before, ntile(10) over (order by rank::double/field_size) decile from r)
+select decile, round(avg(rating_before),1) from d group by 1 order by 1"
+```

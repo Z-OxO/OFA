@@ -219,6 +219,27 @@ J0 n'avait pas chiffré les événements, qui coûtent presque autant. Projectio
 RECON § 10.3 : **32 Go pour 100 000 parties**, et non 17,1 Go. Sur le budget de 100 Go du serveur,
 cela reste tenable (total projeté ~86 Go), mais la marge passe de 29 à 14 Go.
 
+## Rating chronologique (J4, mesures sur les 48 100 parties du périmètre)
+
+| mesure | valeur |
+| --- | --- |
+| `ofa rating` : passe complète | **14,3 s** pour 48 100 parties, 1 684 613 lignes écrites |
+| débit | **3 360 parties/s**, soit 118 000 participations/s, sur **un** cœur |
+| pic RSS | **1,33 Go** (un mois de partition en mémoire : 2,07 M de participations lues) |
+| chargement des Parquet | 2,1 s pour les 2,07 M de participations (pyarrow, 5 colonnes) |
+| sortie | **20,7 Mo** pour 1 684 613 lignes = **12,3 o par ligne** |
+| `ofa rating --report` | **27,9 s** : 9,24 M de paires d'évaluation sur l'échantillon de confirmation |
+
+Le modèle est en Python pur, sans numpy : il n'y a rien à vectoriser entre parties (le rating est
+chronologique par définition), et **à l'intérieur** d'une partie le gradient de Plackett-Luce est
+O(n) au lieu du O(n²) d'un Elo par paires — 113 M de mises à jour au lieu de 1,4 milliard sur
+l'archive projetée du serveur (ADR-0010). Les 14 s se répartissent à peu près moitié lecture,
+moitié modèle.
+
+**Le pic mémoire est la seule limite d'échelle** : un mois complet du serveur (~206 000 parties,
+7,8 M de participations) projette **~5 Go**. Au-delà, découper par jour à l'intérieur de la
+partition mensuelle (`shortcut:` dans `ofa/rating.py`) ; le modèle n'a pas à changer.
+
 ## À remesurer plus tard
 
 - [x] ~~Les 5,00 o/ligne viennent de séries synthétiques réalistes~~ → **8,24 o** pour
@@ -226,3 +247,4 @@ cela reste tenable (total projeté ~86 Go), mais la marge passe de 29 à 14 Go.
 - [x] ~~Débit de re-sim avec N workers en parallèle~~ → **365 parties/h à 6 workers**, pic 925 Mo.
 - [ ] Temps de lecture des Parquet par le site (cible : 95 % < 300 ms, J6).
 - [ ] Le même run sur le serveur (8 workers, 16 Go) : vérifier les 486 parties/h projetées.
+- [ ] `ofa rating` sur un mois complet du serveur : vérifier les ~5 Go de pic projetés.

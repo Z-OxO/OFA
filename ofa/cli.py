@@ -5,7 +5,7 @@ import json
 import sys
 from pathlib import Path
 
-from . import config, engine, fixtures, index, ingest, normalize, purge, resim
+from . import config, engine, fixtures, index, ingest, normalize, purge, rating, resim
 from .client import CircuitOpen, Client, rate_report
 
 
@@ -218,6 +218,52 @@ def cmd_resim(args) -> int:
     return 0
 
 
+def cmd_rating(args) -> int:
+    """Le niveau d'avant-partie de chaque (partie, joueur), dans l'ordre du temps.
+
+    Ce n'est pas une fin : c'est le controle « a niveau egal » sans lequel une fiche tactique
+    du J5 confondrait « ce comportement fait gagner » et « les bons joueurs le font ».
+    """
+    cfg = config.load()
+    parquet = cfg.data_dir / "parquet"
+    out = Path(args.out) if args.out else cfg.data_dir / "rating"
+    if args.report:
+        if not out.exists():
+            print("aucun rating : lance `uv run ofa rating`", file=sys.stderr)
+            return 1
+        report = rating.metrics(parquet, out)
+        print(f"echantillon de confirmation : depuis {report['since']}, {report['games']} parties")
+        print(
+            f"{'mode':<14}{'>=n':>4}{'parties':>9}{'joueurs':>9}{'paires':>10}"
+            f"{'log-loss':>10}{'naif':>8}{'Spearman':>10}{'experience':>12}"
+        )
+        for key, c in report["cells"].items():
+            mode, threshold = key.rsplit("|", 1)
+            if c["pairs"] == 0:
+                continue
+            print(
+                f"{mode:<14}{threshold:>4}{c['games']:>9}{c['players']:>9}{c['pairs']:>10}"
+                f"{c['logloss']:>10.4f}{c['logloss_naive']:>8.4f}"
+                f"{c['spearman']:>10.3f}{c['spearman_experience']:>12.3f}"
+            )
+        cell = report["cells"].get("tous|0")
+        if cell is None or cell["pairs"] == 0:
+            print("pas assez de paires pour conclure", file=sys.stderr)
+            return 1
+        ok = (
+            cell["logloss"] < cell["logloss_naive"]
+            and cell["spearman"] > cell["spearman_experience"]
+        )
+        print(
+            "\nVERDICT :",
+            "le rating bat les deux references" if ok else "REFERENCE NAIVE NON BATTUE",
+        )
+        return 0 if ok else 1
+    report = rating.rebuild(parquet, out)
+    print(json.dumps(report, ensure_ascii=False))
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="ofa", description="OpenFront Analyzer")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -273,6 +319,15 @@ def main(argv: list[str] | None = None) -> int:
         "l'archive complete). DETRUIT les worktrees, donc explicite et jamais par defaut.",
     )
     p.set_defaults(func=cmd_resim)
+
+    p = sub.add_parser("rating", help="le niveau d'avant-partie, dans l'ordre du temps")
+    p.add_argument("--out", default=None, help="repertoire de sortie (defaut: data/rating)")
+    p.add_argument(
+        "--report",
+        action="store_true",
+        help="relit data/rating et sort l'acceptation sur l'echantillon de confirmation",
+    )
+    p.set_defaults(func=cmd_rating)
 
     p = sub.add_parser("rate-check", help="verifie le debit dans le journal des requetes")
     p.add_argument("--log", default=None)
