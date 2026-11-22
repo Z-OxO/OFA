@@ -309,6 +309,18 @@ def by_commit(games: list[dict]) -> dict[str, list[dict]]:
     return dict(sorted(groups.items(), key=lambda kv: -len(kv[1])))
 
 
+def evictions(remaining: dict[str, int], lockfiles: dict[str, str]) -> tuple[list[str], set[str]]:
+    """Les commits dont le lot est fini, et les lockfiles qu'il ne faut PAS evincer.
+
+    Un lockfile reste utile tant qu'un commit en attente le partage : 5 des 6 commits de
+    l'archive courante partagent le meme, donc l'evincer au premier commit fini obligerait a
+    refaire un `npm ci` de 15 s pour chacun des quatre suivants.
+    """
+    finis = sorted(sha for sha, n in remaining.items() if n <= 0)
+    utiles = {lockfiles[sha] for sha, n in remaining.items() if n > 0 and sha in lockfiles}
+    return finis, utiles
+
+
 def workers_default() -> int:
     """0,8 Go par worker mesure au J0 : ici c'est la RAM qui plafonne, pas les 20 coeurs."""
     cpus = os.cpu_count() or 1
@@ -478,6 +490,7 @@ def resim(
     workers: int | None = None,
     batch: int = 8,
     dry_run: bool = False,
+    evict: bool = False,
 ) -> dict:
     """Rejoue la selection et ecrit les trois tables. Reprend ou elle s'est arretee."""
     conn = index.connect(cfg.index_db)
@@ -527,24 +540,45 @@ def resim(
         statuses: Counter = Counter()
         rows = 0
         started = time.monotonic()
+        # Les taches sont contigues par commit (tri ci-dessus) et `pool.map` rend les lots dans
+        # l'ordre : quand le compteur d'un commit tombe a zero, plus aucune tache en vol ne
+        # l'utilise, et son moteur peut partir.
+        restants = Counter(g["git_commit"] for g in selected)
+        lockfiles = (
+            {sha: engine.lockfile_sha(cfg.data_dir, sha) for sha in groups if sha} if evict else {}
+        )
+        report["freed"] = []
         # Python 3.14 demarre en forkserver, dont le socket est refuse par le sandbox.
         ctx = multiprocessing.get_context("fork")
         with ProcessPoolExecutor(max_workers=workers or workers_default(), mp_context=ctx) as pool:
-            for summaries in pool.map(run_batch, batches):
+            for b, summaries in zip(batches, pool.map(run_batch, batches), strict=True):
                 for s in summaries:
                     index.resim_record(conn, s)
                     statuses[s["status"]] += 1
                     rows += s.get("rows") or 0
                 conn.commit()
+                for t in b:
+                    restants[t["git_commit"]] -= 1
                 print(
                     f"{sum(statuses.values())}/{len(tasks)} "
                     f"ok={statuses['ok']} lignes={rows} "
                     f"{(time.monotonic() - started) / 60:.1f} min",
                     flush=True,
                 )
+                if not evict:
+                    continue
+                finis, utiles = evictions(restants, lockfiles)
+                for sha in finis:
+                    del restants[sha]
+                    freed = engine.evict(cfg.data_dir, sha, utiles)
+                    report["freed"].append(freed)
+                    print(f"  evince {freed['commit']} : {json.dumps(freed)}", flush=True)
         report["by_status"] = dict(statuses.most_common())
         report["rows"] = rows
         report["wall_min"] = round((time.monotonic() - started) / 60, 1)
+        report["freed_mb"] = sum(
+            (f["worktree_mb"] or 0) + (f["node_modules_mb"] or 0) for f in report["freed"]
+        )
         return report
     finally:
         conn.close()

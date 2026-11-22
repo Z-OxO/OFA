@@ -16,6 +16,18 @@ Machines : **local** WSL2, 20 cœurs / **7 Go RAM** / 927 Go ; **serveur** Debia
 | Matérialisation d'une map (pangaea) | 1,3 Mo | `git archive <tree> \| tar -x` |
 
 **Coût par commit distinct ≈ 48 Mo** (37 Mo de code + ~11 Mo de delta `node_modules`).
+
+**Corrigé après le J3 : ce chiffre cache le plus gros poste.** Les 11 Mo sont le *delta* d'un
+`cp -al` ; la **première** installation d'une version de lockfile coûte **362 Mo**, partagés
+ensuite en liens durs. Sur 435 jours (~98 versions de lockfile), c'est **35 Go** — invisible à
+`du -sh data/node_modules`, qui affiche 22 Mo parce qu'il ne compte un lien dur qu'une fois.
+Le cache moteur complet de l'archive vaut donc **2,1 + 17,8 + 35 + 1,5 = 56,4 Go**, d'où
+l'éviction (ADR-0008, `ofa resim --evict`).
+
+Et un worktree n'est pas un dépôt : il ne contient **aucun objet git** (son `.git` est un fichier
+qui pointe vers celui du clone), donc sa taille est celle des fichiers en clair. Mesuré sur un
+worktree resté non resserré : 393 Mo, dont `map-generator` **283 Mo**, assets de `resources/`
+59 Mo, `proprietary/` 16 Mo, et **37 Mo de code utile**.
 Mesuré : 2 611 commits/an mais seulement **82 versions de `package-lock.json`** et **223 versions de
 maps** ; et surtout **3 commits distincts seulement sur 300 parties réelles de 7 jours**, soit de
 l'ordre de 150 commits/an à provisionner → ~7 Go.

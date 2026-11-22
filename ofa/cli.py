@@ -212,6 +212,7 @@ def cmd_resim(args) -> int:
         workers=args.workers,
         batch=args.batch,
         dry_run=args.dry_run,
+        evict=args.evict,
     )
     print(json.dumps(report, ensure_ascii=False))
     return 0
@@ -265,6 +266,12 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--batch", type=int, default=8, help="parties par tache (defaut 8)")
     p.add_argument("--dry-run", action="store_true", help="affiche la selection, ne rejoue rien")
     p.add_argument("--report", action="store_true", help="relit le journal et sort l'acceptation")
+    p.add_argument(
+        "--evict",
+        action="store_true",
+        help="retire le moteur d'un commit des que son lot est fini (ADR-0008 : 51 Go sur "
+        "l'archive complete). DETRUIT les worktrees, donc explicite et jamais par defaut.",
+    )
     p.set_defaults(func=cmd_resim)
 
     p = sub.add_parser("rate-check", help="verifie le debit dans le journal des requetes")

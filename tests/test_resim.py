@@ -244,6 +244,28 @@ def test_commit_absent_ou_bidon_est_refuse():
     assert engine.commit_exists(data_dir, "8b5d071eed95f07c701b32e4c64e95b03f8577c1")
 
 
+def test_eviction_garde_un_lockfile_encore_partage():
+    """5 des 6 commits de l'archive partagent le meme lockfile : l'evincer au premier commit
+    fini coûterait un `npm ci` de 15 s pour chacun des suivants."""
+    lockfiles = {"aaa": "lock1", "bbb": "lock1", "ccc": "lock2"}
+    # Le lot de `aaa` est fini, `bbb` et `ccc` attendent encore.
+    finis, utiles = resim.evictions({"aaa": 0, "bbb": 3, "ccc": 1}, lockfiles)
+    assert finis == ["aaa"]
+    assert utiles == {"lock1", "lock2"}  # lock1 sert encore a bbb : on n'y touche pas
+    # `bbb` fini a son tour : plus personne ne partage lock1.
+    finis, utiles = resim.evictions({"bbb": 0, "ccc": 1}, lockfiles)
+    assert finis == ["bbb"] and utiles == {"lock2"}
+    # Plus rien en attente : aucun lockfile a garder.
+    assert resim.evictions({"ccc": 0}, lockfiles) == (["ccc"], set())
+    # Rien de fini : rien a evincer.
+    assert resim.evictions({"aaa": 2}, lockfiles) == ([], {"lock1"})
+
+
+def test_eviction_d_un_moteur_absent_ne_fait_rien():
+    freed = engine.evict(Path("/inexistant"), "0" * 40, set())
+    assert freed["worktree_mb"] == 0 and freed["erreur"] is None
+
+
 @pytest.mark.slow
 @pytest.mark.skipif(not CLONE.exists(), reason="clone de reference absent")
 def test_une_vraie_partie_rejouee_de_bout_en_bout(tmp_path):

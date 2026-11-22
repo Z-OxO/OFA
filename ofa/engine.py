@@ -99,6 +99,20 @@ def node_version_note(data_dir: Path, sha: str) -> str | None:
     return f"node attendu {want!r}, lance {got!r}"
 
 
+def _add_worktree(data_dir: Path, wt: Path, sha: str) -> None:
+    """Le worktree resserre : 390 Mo de checkout ramenes a 37 (mesure J0).
+
+    Un worktree ne contient aucun objet git — son `.git` est un fichier qui pointe vers celui du
+    clone — donc sa taille est celle des fichiers en clair. Les 353 Mo exclus sont
+    `map-generator/` (283 Mo), les assets de `resources/` (59) et `proprietary/` (16) : le moteur
+    n'en importe rien, ce qui a ete verifie au J0 en comparant les hashs d'un replay.
+    """
+    git(data_dir, "worktree", "add", "--no-checkout", str(wt), sha)
+    _run(["git", "sparse-checkout", "init", "--no-cone"], cwd=wt)
+    _run(["git", "sparse-checkout", "set", *SPARSE], cwd=wt)
+    _run(["git", "checkout"], cwd=wt)
+
+
 def prepare(data_dir: Path, sha: str) -> Path:
     """Rend le moteur du commit `sha` pret a tourner. Idempotent.
 
@@ -109,14 +123,18 @@ def prepare(data_dir: Path, sha: str) -> Path:
     wt = engine_dir(data_dir, sha)
     if not (wt / "package.json").exists():
         try:
-            git(data_dir, "worktree", "add", "--no-checkout", str(wt), sha)
-            _run(["git", "sparse-checkout", "init", "--no-cone"], cwd=wt)
-            _run(["git", "sparse-checkout", "set", *SPARSE], cwd=wt)
-            _run(["git", "checkout"], cwd=wt)
-        except RuntimeError as exc:
+            _add_worktree(data_dir, wt, sha)
+        except RuntimeError:
+            # Une inscription fantome (`git worktree list` dit `prunable`) fait refuser `add` :
+            # « use 'add -f' to override, or 'prune' or 'remove' to clear ». Vecu apres une
+            # eviction a moitie faite, `git worktree remove` n'etant pas atomique.
             shutil.rmtree(wt, ignore_errors=True)
-            git(data_dir, "worktree", "prune", check=False)
-            raise NeedsShell([f"uv run ofa engines --commit {sha}"], str(exc)) from exc
+            try:
+                git(data_dir, "worktree", "prune")
+                _add_worktree(data_dir, wt, sha)
+            except RuntimeError as exc:
+                shutil.rmtree(wt, ignore_errors=True)
+                raise NeedsShell([f"uv run ofa engines --commit {sha}"], str(exc)) from exc
     nm = wt / "node_modules"
     if not nm.exists():
         lock = lockfile_sha(data_dir, sha)
@@ -140,6 +158,52 @@ def prepare(data_dir: Path, sha: str) -> Path:
             cache.parent.mkdir(parents=True, exist_ok=True)
             _run(["cp", "-al", str(nm), str(cache)])
     return wt
+
+
+def _du_mb(path: Path, exclude_node_modules: bool = False) -> int:
+    args = (
+        ["du", "-sm"] + (["--exclude=node_modules"] if exclude_node_modules else []) + [str(path)]
+    )
+    r = subprocess.run(args, check=False, text=True, capture_output=True)
+    return int(r.stdout.split()[0]) if r.stdout else 0
+
+
+def evict(data_dir: Path, sha: str, keep_lockfiles: set[str]) -> dict:
+    """Retire le moteur d'un commit dont le lot est fini, et son `node_modules` si personne ne
+    le partage plus.
+
+    On rejoue **commit par commit** (ADR-0008) : un moteur sert une fois, puis plus jamais. Sans
+    cette eviction, les 435 jours d'archive laissent ~370 worktrees (17,8 Go) et ~98 versions de
+    `node_modules` (35 Go) sur un disque de 100 Go — mesure refaite apres le J3.
+
+    Le cache de `node_modules` est un champ de liens durs : le supprimer alors qu'un worktree
+    encore vivant le partage ne detruit rien, les fichiers survivent par leur autre lien. L'espace
+    n'est rendu qu'au dernier lien, ce qui est exactement le comportement voulu.
+    """
+    wt = engine_dir(data_dir, sha)
+    freed = {"commit": sha[:8], "worktree_mb": 0, "node_modules_mb": 0, "erreur": None}
+    if not wt.exists():
+        return freed
+    lock = lockfile_sha(data_dir, sha)  # lu dans le clone, donc valable apres suppression
+    mb = _du_mb(wt, exclude_node_modules=True)
+    try:
+        git(data_dir, "worktree", "remove", "--force", str(wt))
+    except RuntimeError as exc:
+        # `git worktree remove` n'est PAS atomique : mesure faite, il supprime les fichiers puis
+        # echoue sur la desinscription quand `.git` est en lecture seule (le sandbox). On rapporte
+        # donc ce qui s'est passe, pas ce qu'on esperait — sinon le rapport annonce 0 Mo libere
+        # alors que 393 Mo sont partis, et l'inscription restee `prunable` fera refuser le
+        # prochain `worktree add` (prepare() la nettoie).
+        freed["erreur"] = str(exc).strip().splitlines()[-1][:200]
+        if wt.exists():
+            return freed
+    freed["worktree_mb"] = mb
+    if lock not in keep_lockfiles:
+        cache = data_dir / "node_modules" / lock
+        if cache.exists():
+            freed["node_modules_mb"] = _du_mb(cache)
+            shutil.rmtree(cache, ignore_errors=True)
+    return freed
 
 
 def map_dir_name(wt: Path, display: str) -> str:

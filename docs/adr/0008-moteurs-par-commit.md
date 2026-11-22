@@ -58,8 +58,23 @@ d'archive en comptent **~370, soit 17,8 Go**. Deux sorties, à trancher au J9 av
   `node_modules` quand aucun commit en attente ne partage son lockfile. Le cache redevient
   transitoire, le plafond devient `--keep-engines`.
 
-Aucune des deux n'est implémentée au J3 : 6 commits font 1,7 Go, une éviction n'aurait aucun cas
-de test réel, et le code mort coûte plus que les 48 Mo qu'il économiserait.
+**Corrigé le 2026-11-22, le jour même : l'éviction est implémentée.** Les deux prémisses de ce
+report étaient fausses.
+
+1. Le portable n'a pas 922 Go libres mais **118** : `df` dans WSL2 annonce la taille *provisionnée*
+   du disque virtuel (ADR-0009). Il n'existe donc aucune machine où le cache moteur est gratuit.
+2. Le coût n'est pas de 17,8 Go mais de **52,8** : les caches `node_modules` pèsent
+   **362 Mo par version de lockfile**, soit ~98 versions sur 435 jours = **35 Go**, et ils sont
+   invisibles à la mesure naïve parce que les worktrees les partagent en liens durs.
+
+`ofa resim --evict` retire donc le moteur d'un commit **dès que son lot est fini**. C'est quasi
+gratuit parce qu'on rejoue commit par commit : un worktree sert une fois, puis plus jamais. Le
+cache `node_modules`, lui, n'est retiré que si **aucun commit en attente ne partage son lockfile** —
+5 des 6 commits de l'archive courante partagent le même, et l'évincer trop tôt coûterait un
+`npm ci` de 15 s pour chacun des suivants (`resim.evictions()`, testé).
+
+L'éviction **n'est pas le défaut** : elle détruit des worktrees, ce qui sur une machine de
+développement serait une surprise désagréable. Les timers du J9 passent le drapeau.
 
 ## Conséquences
 
@@ -81,15 +96,11 @@ du -sm --exclude=node_modules data/engines/*   # 37 Mo par commit si le sparse a
 ```
 
 Un worktree à ~400 Mo au lieu de 37 Mo signale un **sparse-checkout non appliqué**. Mesuré après
-le run : 6 des 7 worktrees font 35 à 37 Mo, et `dd85bcfb` en fait **393**. 356 Mo perdus, sans
-conséquence sur le résultat (il a rejoué ses 83 parties normalement) ; à recréer hors sandbox si on
-veut la place :
-
-```bash
-git -C data/openfront worktree remove --force data/engines/dd85bcfb8b20e599fae15298bf56db1e92947f61
-uv run ofa engines
-```
+le run : 6 des 7 worktrees faisaient 35 à 37 Mo, et `dd85bcfb` **393** — ses 353 Mo de trop étant
+``map-generator`` (283 Mo), les assets de `resources/` (59) et `proprietary/` (16), dont le moteur
+n'importe rien. Il a été **évincé**, ce qui a servi de premier essai réel à `engine.evict()` et a
+rendu les 393 Mo.
 
 Attention au piège de la mesure : sans `--exclude=node_modules`, `du` compte les `node_modules`
 partagés en liens durs comme s'ils appartenaient à chaque worktree, et les six worktrees sobres
-affichent eux aussi ~400 Mo.
+affichent eux aussi ~400 Mo. C'est ce piège qui a caché les 35 Go de caches de lockfile.

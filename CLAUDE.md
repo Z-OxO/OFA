@@ -22,11 +22,13 @@ Spec : docs/SPEC.md (lis seulement la section du jalon en cours). Avancement : d
   data/parquet/, que `normalize` échange en bloc.
 - Tout appel à l'API OpenFront passe par ofa/client.py (débit limité). Aucun autre chemin.
 - TypeScript uniquement dans resim/. data/openfront/ = clone de référence, lecture seule.
-- Deux machines (ADR-0009) : le SERVEUR collecte, normalise et héberge le site ; ce PORTABLE
-  porte le moteur et la re-sim. Le cache moteur (clone + worktrees + maps, ~20 Go) ne va
-  jamais sur le serveur, c'est ce qui fait tenir ses 100 Go. Circulent : raw/full et
-  parquet/games vers ici, data/resim vers là-bas. Les Parquet du J2 se reconstruisent, ils ne
-  se transportent pas.
+- Deux machines (ADR-0009) : le SERVEUR porte tout (collecte continue, normalisation, re-sim,
+  site) ; ce PORTABLE est une machine de développement. Ce qui fait tenir les 100 Go du serveur,
+  c'est `ofa resim --evict` (51 Go : les worktrees ET les caches node_modules, 362 Mo par version
+  de lockfile). Circulent : raw/full + parquet/games vers ici, le code par git vers là-bas. Les
+  Parquet se reconstruisent en 2 h 45, ils ne se transportent pas.
+- `df` sous WSL2 annonce la taille PROVISIONNÉE du disque virtuel (1007 Go) : le vrai espace libre
+  est celui du disque Windows, `df -h /mnt/c` (118 Go). Ne jamais dimensionner sur le premier.
 
 ## Règles
 - IMPORTANT : aucune conclusion d'analyse sans la skill /tactic et l'agent stats-reviewer.
