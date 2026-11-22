@@ -233,16 +233,21 @@ duckdb -c "select count(*) from 'data/resim/player_ticks/**/*.parquet'"
 
 | | lignes | taille | par ligne |
 | --- | --- | --- | --- |
-| `data/resim/player_ticks/month=YYYY-MM/part-*.parquet` | 10 518 824 | 86,7 Mo | 8,24 o |
-| `data/resim/events/month=YYYY-MM/part-*.parquet` | 17 452 122 | 77,9 Mo | 4,46 o |
-| `data/resim/players/month=YYYY-MM/part-*.parquet` | 188 166 | 3,4 Mo | 18,0 o |
-| `data/resim/borders/month=YYYY-MM/part-*.parquet` | **3,6 × `player_ticks`** | | |
+| `data/resim/player_ticks/month=YYYY-MM/part-*.parquet` | 10 518 824 | 118,7 Mo | 11,28 o |
+| `data/resim/events/month=YYYY-MM/part-*.parquet` | 17 452 122 | 101,9 Mo | 5,84 o |
+| `data/resim/players/month=YYYY-MM/part-*.parquet` | 188 166 | 4,6 Mo | 24,59 o |
+| `data/resim/borders/month=YYYY-MM/part-*.parquet` | **46 155 545** | 53,2 Mo | **1,15 o** |
+
+**La table `borders` ne coûte presque rien en disque** : 46 M de lignes pour 53 Mo, soit 1,15 o par
+ligne, parce qu'elle est triée par `(a, tick, b)` et que trois de ses cinq colonnes sont des séries
+quasi monotones que `DELTA_BINARY_PACKED` écrase. Son coût est en CPU, pas en octets (docs/PERF.md
+et le jalon J4b).
 
 Mesuré le 2026-11-22 sur **513 parties** (les 514 `has_turns and stats_agreed and in_scope` de
-l'archive, moins une solo sans hash) : 322 Ko par partie, 20 500 lignes de trajectoire et
-34 000 événements chacune. **Ces totaux datent d'avant l'ADR-0011** : la géographie multiplie les
-lignes par 2,5 (mesure sur la pire partie : 205 038 → 514 423) et ajoute la table `borders`, qui
-pèse à elle seule 3,6 fois `player_ticks`. Les totaux sont à remesurer après la re-sim.
+l'archive, moins une solo sans hash), géographie comprise : **74 314 657 lignes, 278,4 Mo**, soit
+**543 Ko par partie**. `player_ticks`, `events` et `players` portent exactement le même nombre de
+lignes qu'avant l'ADR-0011 — c'est l'une des preuves que la géographie n'a pas perturbé la
+simulation ; seules des colonnes s'y sont ajoutées, plus la table `borders`.
 
 **Racine séparée, et c'est voulu** : `ofa normalize` écrit `data/parquet.tmp/` puis **échange le
 répertoire entier**, donc tout ce qui vivrait sous `data/parquet/` serait détruit à la

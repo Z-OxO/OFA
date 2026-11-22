@@ -7,7 +7,7 @@ Spec : [docs/SPEC.md](SPEC.md). Décisions : [docs/adr/](adr/). Perf : [docs/PER
 | J0 Reconnaissance et mesures | **terminé** | 2026-11-21 |
 | J1 Ingestion | **terminé** — les 5 critères atteints | 2026-11-21 |
 | J2 Normalisation | **terminé** | 2026-11-22 |
-| J3 Re-simulation | **terminé** — 513/514 parties valides (99,81 %) | 2026-11-22 |
+| J3 Re-simulation | **terminé** — 513/514 (99,81 %), géographie comprise (ADR-0011) | 2026-11-22 |
 | J4 Niveau | **terminé** — log-loss 0,637 contre 0,693, Spearman 0,311 | 2026-11-22 |
 | J4b Optimisation mesurée | **à faire** — 20,6 h de CPU pour 489 parties, à diviser par 3 | |
 | J5 Moteur d'analyse | à faire | |
@@ -616,3 +616,100 @@ chemin — la règle valait aussi ici.
 - Ce que le J5 a maintenant en main : `rating_before` pour « à niveau égal », les trajectoires du
   J3 pour « à état égal à t1 », `games` pour le contexte, et `public_id` pour comparer un joueur
   avec lui-même. Les quatre contrôles de la SPEC sont couverts.
+
+---
+
+## J3 étendu — La géographie (ADR-0011)
+
+Le J3 disait *combien* un joueur possède, *quand* il attaque et *qui* il conquiert, jamais *où*.
+Or la moitié des questions tactiques sont géographiques : a-t-il attaqué son voisin le plus
+faible ? était-il enclavé ou adossé à une côte ? son front avec le futur gagnant faisait-il 10
+tuiles ou 400 ? Une passe de re-sim coûtant des heures, l'extension a été faite **en une seule
+fois**, après un inventaire exhaustif des interfaces du moteur.
+
+### Ce que l'inventaire a corrigé — trois erreurs de ma part, toutes par la mesure
+
+| ce que je croyais manquant | ce que la mesure a dit |
+| --- | --- |
+| les retraites | **déjà dans `intents`** : `cancel_attack` est un intent |
+| les positions de construction | **déjà dans `intents`** : `intents.tile` pour `build_unit`, cibles de bombes comprises |
+| `tradingPartners()` utile | **102 sur 104 joueurs** : `canTrade` ne teste que l'absence d'embargo. Écarté |
+| `doomsdayClockTicks()` utile | `doomsday` est faux sur les **10 518 824** lignes du J3 : état jamais atteint. Écarté |
+
+D'où la règle qui en sort : **`intents` porte les décisions, `data/resim/` les conséquences et
+l'état.** Et un pont trouvé en lisant `GameMapImpl` : `x = ref % width`, `y = (ref / width) | 0`.
+La colonne `map_width` ajoutée ici débloque donc les coordonnées de **tous** les `TileRef` déjà
+stockés, les 91 784 lignes d'`intents` du J2 comprises.
+
+### La découverte qui a dessiné la table
+
+`player.nearby()` — la notion de voisin du **moteur lui-même** — ne se limite pas à l'adjacence
+terrestre : il ajoute les joueurs séparés par une **rivière de moins de 5 tuiles**, attaquables en
+bateau. Mesuré sur les 513 parties : **2 193 323 relations de voisinage par l'eau, soit 4,93 %**.
+Une adjacence réimplémentée à la main les aurait manquées toutes, et silencieusement. C'est la
+leçon du J3 (on prend `player.team()`, on ne recalcule pas `humanTeams`), et c'est pour ça que
+l'ensemble des voisins vient de `nearby()` quand seule la **longueur** des fronts est recomptée.
+
+### Critères d'acceptation : tenus
+
+| Critère | Preuve |
+| --- | --- |
+| ≥ 99 % de parties valides | **513/514 = 99,81 %**, et **5 089 773 ticks rejoués, exactement comme au J3** |
+| Les échecs listés par cause | 1 seul : `eDoSmY3bBV`, `hash_absent` — le record ne porte aucun hash, point 1 de l'ADR-0003, même cas qu'au J3 |
+| Débit et pic mémoire consignés | 65 ticks/s/cœur à 12 workers, 23,6 parties/h/cœur, pic 906 Mo, 21,76 h de CPU |
+
+### Cinq contre-épreuves, dont trois indépendantes du code de `ofa`
+
+1. **Les unités construites, recomptées depuis les événements** contre `participants.units_*_built`
+   (les stats que le serveur de jeu a archivées pendant la partie) : **61 077 comparaisons,
+   0 écart.**
+2. **Le pic de territoire échantillonné** contre `participants.tiles_peak`, le pic exact :
+   **19 038 comparaisons, 0 dépassement**, 9 179 égalités strictes, 99,86 % du pic en moyenne —
+   **chiffre pour chiffre le résultat du J3**.
+3. **Zéro doublon** sur `(game_id, small_id, tick)` pour `player_ticks` (10 518 824 lignes),
+   `(game_id, tick, a, b)` pour `borders` (46 155 545) et `(game_id, small_id)` pour `players`.
+4. **`borders` recoupe les agrégats de `player_ticks`** : le nombre de voisins et le plus long
+   front, recalculés depuis la table de paires, contre les colonnes écrites dans la même passe —
+   **10 161 177 lignes comparées, 0 désaccord.**
+5. **Aucune position de départ hors de la carte** sur 188 166 joueurs (1 462 sans position : des
+   joueurs qui n'ont jamais posé leur premier carré).
+
+Et la preuve la plus parlante du non-régression : `player_ticks`, `events` et `players` portent
+**exactement** le même nombre de lignes qu'avant l'extension (10 518 824 / 17 452 122 / 188 166).
+
+### Mesures
+
+| Mesure | Valeur |
+| --- | --- |
+| Sortie | **74 314 657 lignes, 278,4 Mo** pour 513 parties — **543 Ko par partie** |
+| `borders` | **46 155 545 lignes pour 53,2 Mo**, soit **1,15 o/ligne** : triée par `(a, tick, b)`, elle est presque gratuite en disque |
+| Coût d'une ligne ailleurs | `player_ticks` 11,28 o (8,24 avant), `events` 5,84 o (4,46), `players` 24,59 o (18,0) |
+| CPU | **21,76 h** contre 8,44 h au J3 |
+| Temps réel | 130,6 min pour 489 parties à 12 workers, puis 27,8 min pour les 24 rattrapées |
+
+### Le piège qui a coûté le plus cher, et il est de méthode
+
+J'avais mesuré le surcoût de la géographie à **+7,4 %** — sur **une** partie, rejouée **seule**, en
+chronométrant **le seul processus Node**. Le coût réel du run est ×2,58. L'erreur n'est pas dans le
+chiffre mais dans l'extrapolation : il ne couvrait ni le reparsing Python, ni la compression
+zstd-19 de 2,6 fois plus de lignes, ni la contention entre 12 processus.
+
+Conséquence directe : `TICKS_PER_SECOND = 172` (mesure J0, une partie seule, sans géographie) sert
+de base au timeout `6 × ticks / TICKS_PER_SECOND`. Avec le vrai débit de 65, **24 parties sur 514
+ont timeouté**, les plus lourdes, et l'acceptation est tombée à 95,1 % avant correction.
+
+**Et deux variables ont changé dans le même run** : la géographie et le passage de 6 à 12 workers.
+Le débit de la machine entière est passé de 1 008 à 615 ticks/s — deux fois plus de processus pour
+39 % de débit en moins, signature d'une saturation de bande passante mémoire. La part de chacune
+n'est **pas** démêlée. C'est la raison d'être du jalon **J4b**, et sa première expérience.
+
+### Ce qui reste ouvert
+
+- **Le J4b doit passer avant la re-sim à grande échelle** : à 21,76 h pour 513 parties, les 20 000
+  parties visées coûteraient ~840 h de CPU.
+- Le worktree `dd85bcfb` a été reprovisionné pendant ce run et fait désormais **37 Mo au lieu de
+  393** : le point laissé ouvert au J3 (« 356 Mo à récupérer ») est réglé.
+- `data/resim.j3-sans-geo/` (161 Mo) garde l'ancienne sortie, sans géographie. À supprimer quand
+  les nouveaux chiffres auront servi.
+- Pas de forme de territoire au-delà de la boîte englobante du plus gros bloc, pas de trajectoire
+  d'unité, pas d'historique tuile par tuile : écartés en connaissance de cause (ADR-0011).

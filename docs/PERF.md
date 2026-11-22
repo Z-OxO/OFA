@@ -219,6 +219,35 @@ J0 n'avait pas chiffré les événements, qui coûtent presque autant. Projectio
 RECON § 10.3 : **32 Go pour 100 000 parties**, et non 17,1 Go. Sur le budget de 100 Go du serveur,
 cela reste tenable (total projeté ~86 Go), mais la marge passe de 29 à 14 Go.
 
+## Géographie (ADR-0011, mesures sur les 513 parties)
+
+| mesure | J3 | avec la géographie |
+| --- | --- | --- |
+| parties valides | 513/514 (99,81 %) | **513/514 (99,81 %)** |
+| ticks rejoués | 5 089 773 | **5 089 773** (à l'identique) |
+| lignes | 28,2 M | **74,3 M** (×2,63) |
+| taille | 161 Mo | **278,4 Mo** (×1,73), 543 Ko/partie |
+| CPU | 8,44 h | **21,76 h** (×2,58) |
+| débit | 168 ticks/s/cœur **à 6 workers** | **65 ticks/s/cœur à 12 workers** |
+| pic RSS | 925 Mo | 906 Mo |
+
+**Attention à la lecture de la dernière ligne : deux variables ont changé en même temps**, la
+géographie et le nombre de workers. Le débit de la machine entière est passé de 1 008 ticks/s
+(6 × 168) à 615 ticks/s réellement observés sur 130,6 min — **deux fois plus de processus pour
+39 % de débit en moins**, ce qui est la signature d'une saturation de bande passante mémoire. La
+part imputable à la géographie et celle imputable à la concurrence ne sont donc **pas** démêlées :
+c'est la première expérience du jalon J4b, le même échantillon à 4, 6, 8, 12 et 16 workers.
+
+Pour mémoire, la seule mesure isolée dont on disposait avant le run : sur la pire partie
+(`cGYPygKBu8`, 28 601 ticks) rejouée **seule**, 374,3 → 401,8 s, soit **+7,4 %**. Extrapoler ce
+chiffre à toute la chaîne était faux d'un facteur 33 — il ne couvrait que le processus Node, ni le
+reparsing Python, ni la compression, ni la contention.
+
+**Conséquence pratique, et piège à retenir** : `TICKS_PER_SECOND` valait 172 (mesure J0, une partie
+seule, sans géographie), et le timeout d'une partie vaut `6 × ticks / TICKS_PER_SECOND`. Avec le
+vrai débit de 65, **24 parties sur 514 ont timeouté** — les plus lourdes — et l'acceptation est
+tombée à 95,1 %. La constante corrigée, les 24 sont revenues valides en 27,8 min.
+
 ## Rating chronologique (J4, mesures sur les 48 100 parties du périmètre)
 
 | mesure | valeur |
