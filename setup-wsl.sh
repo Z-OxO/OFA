@@ -126,6 +126,13 @@ mkdir -p data scratch docs/adr findings/prereg findings/cards tests/fixtures
 git config user.name  >/dev/null || warn "git user.name non défini : git config --global user.name 'Djo'"
 git config user.email >/dev/null || warn "git user.email non défini : git config --global user.email 'toi@exemple.fr'"
 
+# Le kit de démarrage n'a pas encore de pyproject.toml : seule une installation depuis
+# le dépôt (le serveur) en a un, et c'est là que les dépendances doivent être posées.
+if [[ -f pyproject.toml ]]; then
+  say "Dépendances Python (uv sync)"
+  uv sync
+fi
+
 # --- 9. Vérification -------------------------------------------------------------
 say "Vérification"
 fail=0

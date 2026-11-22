@@ -91,3 +91,16 @@ du -sm --exclude=node_modules data/engines/*      # attendu : 35 a 37 Mo chacun
 du -sh data/node_modules                          # trompeur : liens durs
 git -C data/openfront worktree list               # aucun `prunable`
 ```
+
+## Mise à jour du 2026-11-22 — le remote existe
+
+La conséquence « il faut un remote git, à régler avant la mise en service » est levée :
+**https://github.com/Z-OxO/OFA** (public, branche `main`). Vérifié avant le premier push : 67
+fichiers suivis, 1,7 Mo, `data/` et `tests/fixtures/` ignorés — donc aucun vrai pseudonyme, aucune
+adresse réelle, ni `.env` ni `.ofa-contact` dans l'historique.
+
+Et une exception, unique et datée, à « portable → serveur : le code » : l'**amorçage** de
+`data/raw/` (566 Mo de meta + 29 Mo de full) et de `data/state/index.sqlite` (54 Mo) par `rsync`.
+Ces 650 Mo ont déjà été payés à l'API ; les refaire télécharger au serveur serait 2 h de requêtes
+pour un résultat identique. Tout ce qui se recalcule (`parquet`, `rating`, `resim`, `maps`,
+`engines`) reste interdit au transport. La marche à suivre complète est dans le README.
