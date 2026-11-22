@@ -64,7 +64,7 @@ l'ADR-0006 ; **1** pour l'incrémental quotidien). `OFA_DATA_DIR` déplace `data
 | `ofa ingest` | collecte les 2 derniers jours, reprend où elle s'est arrêtée | quelques minutes |
 | `ofa ingest --backfill` | remonte toute l'archive (depuis le 2025-09-12) par `afterId` | **7,7 j** à 4 req/s, 26 Go, 2,65 M parties (projeté) |
 | `ofa purge-deleted` | retire les comptes supprimés entre-temps | minutes |
-| `ofa fetch-full --sample N --seed 20261121` | télécharge le record **complet** (avec `turns`) de N parties tirées au hasard. Même graine = **sur-ensemble** : les présentes ne coûtent rien | 57 Ko et 1 requête par partie |
+| `ofa fetch-full --sample N --seed 20261121` | télécharge le record **complet** (avec `turns`) de N parties tirées au hasard. Même graine = **sur-ensemble** : les présentes ne coûtent rien | **1,4 req/s mesuré, quel que soit `OFA_RATE`** (voir ci-dessous), 57 Ko par partie |
 | `ofa normalize` | reconstruit **en entier** `data/parquet/` (games, participants, intents) | 3 min 27 pour 55 952 records ; ~2 h 45 pour l'archive complète (projeté) |
 | `ofa rating` | le niveau d'avant-partie de chaque (partie, joueur), reconstruit en entier | 14,3 s pour 48 100 parties, 1,33 Go de RSS |
 | `ofa engines` | prépare un moteur par version du jeu (worktree + `npm ci`) | 37 Mo par worktree, 362 Mo par version de lockfile |
@@ -97,35 +97,45 @@ l'ADR-0006 ; **1** pour l'incrémental quotidien). `OFA_DATA_DIR` déplace `data
 
 L'ordre compte, et les étapes 3 et 4 cohabitent (l'une est du réseau, l'autre du CPU).
 
-```bash
-cd ~/ofa
-tmux new -s ofa          # les longues tâches ne vivent pas dans un ssh qui se coupe
+La re-simulation **n'attend pas la fin de la collecte** : dès qu'il y a de quoi travailler, on
+normalise et on rejoue, pendant que la collecte continue. Réseau contre CPU, aucun conflit.
 
-# 1. densifier la fenêtre : les records complets, seuls sur l'API
+```bash
+# tmux 1 — la collecte, seule sur l'API, ~9 h 24 pour 48 100
 OFA_RATE=8 uv run ofa fetch-full --sample 48100 --seed 20261121
 
-# 2. mettre les tables à jour — c'est `normalize` qui met `has_turns` à jour, donc la sélection
-#    de la re-sim, et qui reconstruit `intents`
-uv run ofa normalize && uv run ofa rating
+# tmux 2 — la re-sim, qui attend un premier lot puis enchaîne
+while [ "$(find data/raw/full -type f | wc -l)" -lt 12000 ]; do sleep 300; done
+uv run ofa normalize && uv run ofa rating && uv run ofa engines && uv run ofa resim --evict
 
-# 3. les moteurs, puis la re-simulation (CPU pur, des jours, reprenable)
-uv run ofa engines
-uv run ofa resim --evict
-
-# 4. dans un AUTRE tmux : le rattrapage historique (réseau pur), pour que le rating soit juste
-OFA_RATE=4 uv run ofa ingest --backfill
-
-# suivi, dans un troisième shell
+# tmux 3 — le suivi
 uv run ofa resim --watch
 ```
 
+Ensuite, et seulement quand l'API est libre (la collecte finie), le rattrapage historique, qui ne
+sert qu'à rendre le rating juste et ne coûte aucun CPU de re-sim :
+
+```bash
+OFA_RATE=4 uv run ofa ingest --backfill
+```
+
+**Un seul `normalize` à la fois, et jamais pendant une re-sim** : il échange `data/parquet/` en
+bloc, et c'est là que `resim` lit sa liste de candidats. Pour prendre en compte un nouveau lot de
+records, on arrête la re-sim, on normalise, on la relance — elle est incrémentale, elle reprend.
+
 ### Combien ça coûte, selon ce qu'on re-simule
 
-| parties re-simulées | brut | `intents` | `resim` | CPU | mur sur 8 cœurs |
-| --- | --- | --- | --- | --- | --- |
-| 4 500 | 257 Mo | 185 Mo | 2,3 Go | 191 h | ~24 h |
-| 20 000 | 1,1 Go | 820 Mo | 10,4 Go | 848 h | 4,4 jours |
-| 48 100 (tout le périmètre d'aujourd'hui) | 2,7 Go | 2,0 Go | 25 Go | 2 040 h | 10,6 jours |
+| parties | collecte | brut | `intents` | `resim` | CPU | mur sur 8 cœurs |
+| --- | --- | --- | --- | --- | --- | --- |
+| 4 500 | 54 min | 257 Mo | 185 Mo | 2,3 Go | 191 h | ~24 h |
+| 20 000 | 4 h 00 | 1,1 Go | 820 Mo | 10,4 Go | 848 h | 4,4 jours |
+| 48 100 (tout le périmètre d'aujourd'hui) | **9 h 24** | 2,7 Go | 2,0 Go | 25 Go | 2 040 h | 10,6 jours |
+
+**`fetch-full` ne va pas plus vite que 1,4 req/s, et `OFA_RATE` n'y change rien** : sa boucle est
+séquentielle, donc son débit est l'inverse de la latence d'un record complet (~0,7 s). Mesuré sur
+le serveur le 2026-11-22 : 84 records par minute à `OFA_RATE=8`. Le paralléliser diviserait la
+collecte par ~6, et c'est **écarté faute de besoin** : la re-simulation dure des jours et la
+collecte peut tourner en même temps qu'elle. À reprendre si un jour quelqu'un attend la collecte.
 
 **Télécharger est gratuit, rejouer est cher** : la collecte d'un record coûte une requête, sa
 re-simulation 153 secondes de CPU. C'est la re-sim qui dimensionne tout.
