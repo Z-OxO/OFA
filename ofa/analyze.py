@@ -155,6 +155,19 @@ win as (
     where tick > {t0} and tick <= {t1}
     group by 1, 2
 ),
+-- Les attaques SUBIES pendant la fenetre. Sans elles, un comportement qui est une REACTION
+-- (demander une alliance parce qu'on se fait attaquer) est confondu avec son declencheur : c'est
+-- la causalite inverse de la SPEC, et le controle a t0 ne la voit pas, parce que le declencheur
+-- arrive APRES t0.
+inc as (
+    select game_id, b as small_id,
+        count(*) filter (where kind = 'attack_start') as atk_in,
+        coalesce(sum(troops) filter (where kind = 'attack_start'), 0) as atk_in_troops,
+        min(tick) filter (where kind = 'attack_start') as first_atk_in_tick
+    from events
+    where tick > {t0} and tick <= {t1} and b <> 0
+    group by 1, 2
+),
 -- `death_position` compte les nations (GameImpl.recordDeathPosition) : le rang est donc recalcule
 -- parmi les HUMAINS seuls. Plus petit = mieux : les vivants d'abord, puis les morts tardifs.
 fin as (
@@ -190,6 +203,8 @@ select
     coalesce(w.ally_req, 0) as ally_req, coalesce(w.ally_ok, 0) as ally_ok,
     coalesce(w.betrayals, 0) as betrayals, coalesce(w.donations, 0) as donations,
     w.first_atk_human_tick, w.first_city_tick, w.first_ally_tick,
+    coalesce(i.atk_in, 0) as atk_in, coalesce(i.atk_in_troops, 0) as atk_in_troops,
+    i.first_atk_in_tick,
     f.rank_pct, coalesce(pa.won, false) as won,
     greatest(coalesce(ap.last_tick, {t1}) - {t1}, 0) as survived_after,
     1.0 * coalesce(ap.peak_after, s1.tiles) / nullif(f.map_land, 0) as peak_share_after,
@@ -200,7 +215,12 @@ select
     ntile(4) over (partition by p.mode order by s0.tiles) as tier_state0,
     ntile(4) over (partition by p.mode order by s1.tiles) as tier_state1,
     case when p.num_players <= 8 then 'S' when p.num_players <= 24 then 'M' else 'L' end
-        as tier_size
+        as tier_size,
+    case
+        when coalesce(i.atk_in, 0) = 0 then 0
+        when i.atk_in <= median(i.atk_in) over () then 1
+        else 2
+    end as tier_pression
 from pop p
 join s1 on s1.game_id = p.game_id
 join s0 on s0.game_id = p.game_id and s0.small_id = s1.small_id
@@ -209,6 +229,7 @@ left join participants pa on pa.game_id = p.game_id and pa.client_id = f.client_
 left join rating r on r.game_id = p.game_id and r.public_id = pa.public_id
 left join win w on w.game_id = p.game_id and w.small_id = s1.small_id
 left join b0 on b0.game_id = p.game_id and b0.small_id = s1.small_id
+left join inc i on i.game_id = p.game_id and i.small_id = s1.small_id
 left join apres ap on ap.game_id = p.game_id and ap.small_id = s1.small_id
 """
 
@@ -532,14 +553,15 @@ def _verdict(spec: Spec, r: dict, suffisant: bool) -> str:
     return "confirme le sens attendu" if r["effet"] * attendu > 0 else "sens OPPOSE a l'attendu"
 
 
-def confirm(cfg: Config, root: Path, spec: Spec, *, draws: int, force: bool = False) -> dict:
+def confirm(cfg: Config, root: Path, spec: Spec, *, draws: int) -> dict:
     """Ouvre l'echantillon de confirmation, UNE fois par hypothese, et le journalise.
 
-    Deuxieme lecture refusee : c'est la regle de la SPEC, et elle est dans le code, pas dans la
-    bonne volonte. Pour re-tester, il faut une nouvelle hypothese, donc un nouvel id.
+    Deuxieme lecture refusee, et SANS echappatoire : c'est la regle de la SPEC, et elle est dans
+    le code, pas dans la bonne volonte. `--force` de la CLI ne leve que le garde de puissance.
+    Pour re-tester, il faut une nouvelle hypothese, donc un nouvel id.
     """
     deja = [x for x in reads(root) if x["hypothese"] == spec.id]
-    if deja and not force:
+    if deja:
         raise SystemExit(
             f"REFUSE : l'echantillon de confirmation a deja ete lu pour {spec.id} "
             f"le {deja[0]['quand']} (prereg {deja[0]['sha_prereg']}). "

@@ -1,0 +1,247 @@
+{
+ "id": "rodage-attaques-ouverture",
+ "enonce": "En FFA, lancer plus d'attaques sur des humains que la médiane entre le tick 210 et le tick 1800 va avec un meilleur classement final parmi les humains.\n",
+ "population": "mode = 'Free For All'",
+ "mode_fenetre": {
+  "t0": 210,
+  "t1": 1800,
+  "controle": "t0"
+ },
+ "definition": "atk_human > median(atk_human) over ()",
+ "mesure_resultat": {
+  "colonne": "rank_pct",
+  "sens_attendu": "-",
+  "unite": "rang normalise parmi les humains (0 = premier)"
+ },
+ "effet": -0.011032136495334082,
+ "ic95": [
+  -0.031307913219333156,
+  0.006990916470957738
+ ],
+ "p": 0.192,
+ "n_observations": 3115,
+ "n_joueurs": 2918,
+ "n_parties": 94,
+ "niveau_preuve": "C",
+ "raison_niveau": "effet non distinguable de zero sur l'echantillon de confirmation",
+ "exploration": {
+  "effet": -0.006638738497329334,
+  "ic95": [
+   -0.019129371276947367,
+   0.005335009856930973
+  ],
+  "p": 0.264,
+  "n": 8615,
+  "joueurs": 7719,
+  "parties": 272
+ },
+ "confirmation": {
+  "effet": -0.011032136495334082,
+  "ic95": [
+   -0.031307913219333156,
+   0.006990916470957738
+  ],
+  "p": 0.192,
+  "n": 3115,
+  "joueurs": 2918,
+  "parties": 94
+ },
+ "robustesse": [
+  {
+   "test": "autre definition",
+   "effet": -0.012721771859464524,
+   "ic95": [
+    -0.03356189088737117,
+    0.010999673758950626
+   ],
+   "n": 6215
+  },
+  {
+   "test": "autre fenetre",
+   "effet": -0.010921860615440634,
+   "ic95": [
+    -0.032784259622515625,
+    0.010113993849694929
+   ],
+   "n": 6263
+  }
+ ],
+ "par_tranche_de_niveau": [
+  {
+   "groupe": "tier_rating=1",
+   "effet": -0.004829516917510346,
+   "ic95": [
+    -0.02090827519093083,
+    0.01291043103149369
+   ]
+  },
+  {
+   "groupe": "tier_rating=2",
+   "effet": 0.008781580832413203,
+   "ic95": [
+    -0.011796420360201286,
+    0.025964787908317712
+   ]
+  },
+  {
+   "groupe": "tier_rating=3",
+   "effet": -0.013335441210550388,
+   "ic95": [
+    -0.03327309650788761,
+    0.005712695739259365
+   ]
+  },
+  {
+   "groupe": "tier_rating=4",
+   "effet": -0.03036941080029307,
+   "ic95": [
+    -0.04960037519914731,
+    -0.012110509097707056
+   ]
+  }
+ ],
+ "par_map": [
+  {
+   "groupe": "map=Europe",
+   "effet": 0.008868042958815152,
+   "ic95": [
+    -0.03797138782769133,
+    0.04520485686287415
+   ]
+  },
+  {
+   "groupe": "map=France",
+   "effet": 0.016060772279178594,
+   "ic95": [
+    -0.03853001558196462,
+    0.07529955851984665
+   ]
+  },
+  {
+   "groupe": "map=Middle East",
+   "effet": -0.023154247735201836,
+   "ic95": [
+    -0.07207590563311762,
+    0.03262560005158969
+   ]
+  }
+ ],
+ "joueur_contre_lui_meme": {
+  "effet": -0.028177240868228346,
+  "ic95": [
+   -0.06314235885026213,
+   0.002518834061250922
+  ],
+  "n": 952,
+  "joueurs": 408
+ },
+ "limites": [
+  "trajectoires disponibles sur 94 parties seulement : c'est `ofa fetch-full` qui decide de ce volume, pas la re-simulation",
+  "population restreinte aux joueurs VIVANTS a t1 = 1800 et aux parties d'au moins 1800 ticks : les parties plus courtes sont hors fiche",
+  "le voisinage n'est connu que pour les voisins humains (`player_ticks` exclut nations et bots)",
+  "controle pris a t0 : l'etat a t1 n'est PAS controle, parce qu'il est l'effet du comportement",
+  "1.07 observation par joueur : la comparaison d'un joueur avec lui-meme est hors de portee sur cet echantillon"
+ ],
+ "exemples": [
+  {
+   "game_id": "cXHsVFedAa",
+   "joueur": "Miaou",
+   "small_id": 52,
+   "mode": "Free For All",
+   "map": "Horn Of Africa",
+   "tick": 704,
+   "mmss": "01:10",
+   "rang_normalise": 0.03,
+   "gagnant": false,
+   "replay": "https://openfront.io/#replay-viewer=cXHsVFedAa"
+  },
+  {
+   "game_id": "dZBrazq6iN",
+   "joueur": "AnonYacht7",
+   "small_id": 13,
+   "mode": "Free For All",
+   "map": "Hawaii",
+   "tick": 389,
+   "mmss": "00:38",
+   "rang_normalise": 0.643,
+   "gagnant": false,
+   "replay": "https://openfront.io/#replay-viewer=dZBrazq6iN"
+  },
+  {
+   "game_id": "c3w2TSpRKx",
+   "joueur": "Tokugawa Shogunate",
+   "small_id": 49,
+   "mode": "Free For All",
+   "map": "Baikal",
+   "tick": 583,
+   "mmss": "00:58",
+   "rang_normalise": 0.037,
+   "gagnant": false,
+   "replay": "https://openfront.io/#replay-viewer=c3w2TSpRKx"
+  },
+  {
+   "game_id": "cBVwVzn1kz",
+   "joueur": "Makar8",
+   "small_id": 19,
+   "mode": "Free For All",
+   "map": "Lisbon",
+   "tick": 652,
+   "mmss": "01:05",
+   "rang_normalise": 0.5,
+   "gagnant": false,
+   "replay": "https://openfront.io/#replay-viewer=cBVwVzn1kz"
+  },
+  {
+   "game_id": "dQhvVEhPyH",
+   "joueur": "Pirate Republic",
+   "small_id": 11,
+   "mode": "Free For All",
+   "map": "Central America",
+   "tick": 565,
+   "mmss": "00:56",
+   "rang_normalise": 0.897,
+   "gagnant": false,
+   "replay": "https://openfront.io/#replay-viewer=dQhvVEhPyH"
+  }
+ ],
+ "contre_exemples": [
+  {
+   "game_id": "dZBrazq6iN",
+   "joueur": "AnonYacht7",
+   "small_id": 13,
+   "mode": "Free For All",
+   "map": "Hawaii",
+   "tick": 389,
+   "mmss": "00:38",
+   "rang_normalise": 0.643,
+   "gagnant": false,
+   "replay": "https://openfront.io/#replay-viewer=dZBrazq6iN"
+  },
+  {
+   "game_id": "cBVwVzn1kz",
+   "joueur": "Makar8",
+   "small_id": 19,
+   "mode": "Free For All",
+   "map": "Lisbon",
+   "tick": 652,
+   "mmss": "01:05",
+   "rang_normalise": 0.5,
+   "gagnant": false,
+   "replay": "https://openfront.io/#replay-viewer=cBVwVzn1kz"
+  },
+  {
+   "game_id": "dQhvVEhPyH",
+   "joueur": "Pirate Republic",
+   "small_id": 11,
+   "mode": "Free For All",
+   "map": "Central America",
+   "tick": 565,
+   "mmss": "00:56",
+   "rang_normalise": 0.897,
+   "gagnant": false,
+   "replay": "https://openfront.io/#replay-viewer=dQhvVEhPyH"
+  }
+ ],
+ "sha_prereg": "14ee1098f6f3bea1",
+ "genere_le": "2026-11-22T19:30:19+0100"
+}

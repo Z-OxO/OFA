@@ -410,7 +410,7 @@ def cmd_analyze(args) -> int:
                 file=sys.stderr,
             )
             return 1
-        r = analyze.confirm(cfg, root, spec, draws=args.draws, force=args.force)
+        r = analyze.confirm(cfg, root, spec, draws=args.draws)
         analyze.save_run(root, r)
         print(json.dumps(r, ensure_ascii=False, indent=1))
         return 0
@@ -528,7 +528,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument(
         "--force",
         action="store_true",
-        help="passe outre un refus de confirmation : A JUSTIFIER DANS LA PRE-INSCRIPTION",
+        help="leve le seul garde de puissance (A JUSTIFIER DANS LA PRE-INSCRIPTION) ; la"
+        " regle d'une seule lecture par hypothese n'est, elle, pas contournable",
     )
     p.set_defaults(func=cmd_analyze)
 

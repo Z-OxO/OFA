@@ -1,0 +1,19 @@
+# RODAGE de la chaîne (J5) : hypothèse volontairement banale, dont la lecture de confirmation est
+# dépensée pour vérifier le pipeline de bout en bout. Ce n'est PAS une des fiches du jalon : c'est
+# une dose, pas un choix, donc elle n'est pas actionnable même si elle se confirme.
+id: rodage-attaques-ouverture
+enonce: >
+  En FFA, lancer plus d'attaques sur des humains que la médiane entre le tick 210 et le tick 1800
+  va avec un meilleur classement final parmi les humains.
+population: "mode = 'Free For All'"
+comportement: "atk_human > median(atk_human) over ()"
+comportement_alt: "atk_human >= 2 * median(atk_human) over ()"
+resultat: rank_pct
+sens_attendu: "-"
+t0: 210
+t1: 1800
+t0_alt: 210
+t1_alt: 3000
+controle: t0
+grappe: public_id
+tick_exemple: first_atk_human_tick

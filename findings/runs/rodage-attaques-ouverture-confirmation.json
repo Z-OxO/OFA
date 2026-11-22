@@ -1,0 +1,27 @@
+{
+ "effet": -0.011032136495334082,
+ "n": 3115,
+ "n_comportement": 1454,
+ "joueurs": 2918,
+ "strates": 62,
+ "parties": 94,
+ "tirages": 500,
+ "ic95": [
+  -0.031307913219333156,
+  0.006990916470957738
+ ],
+ "p": 0.192,
+ "ecart_type": 0.009773652006954802,
+ "mde": 0.027366225619473442,
+ "hypothese": "rodage-attaques-ouverture",
+ "sha_prereg": "14ee1098f6f3bea1",
+ "echantillon": "confirmation",
+ "fenetre": [
+  210,
+  1800
+ ],
+ "definition": "atk_human > median(atk_human) over ()",
+ "resultat_mesure": "rank_pct",
+ "echantillon_suffisant": true,
+ "verdict": "sous-puissante"
+}
