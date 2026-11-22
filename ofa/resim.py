@@ -16,7 +16,7 @@ import re
 import subprocess
 import time
 from collections import Counter
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 
 import pyarrow as pa
@@ -347,6 +347,23 @@ def tables_from_stream(path: Path, game_id: str, month: str) -> dict[str, pa.Tab
 # --------------------------------------------------------------------------------------
 
 
+def progress_line(ok: int, total: int, echecs: int, watched: float, rate: float | None) -> str:
+    """La ligne de suivi. Pure : ni horloge ni terminal, donc testable.
+
+    `rate` est en parties par seconde, mesure depuis le debut du SUIVI et non du run : un
+    suivi lance en cours de route donne donc une estimation juste, pas une moyenne faussee
+    par les minutes qu'il n'a pas vues.
+    """
+    width = 24
+    filled = width * ok // total if total else width
+    pct = 100 * ok / total if total else 100.0
+    reste = f"~{(total - ok) / rate / 60:.0f} min" if rate and ok < total else "-"
+    return (
+        f"[{'#' * filled}{'-' * (width - filled)}] {ok}/{total} {pct:5.1f}%  "
+        f"echecs {echecs}  suivi {watched / 60:.1f} min  reste {reste}"
+    )
+
+
 def candidates(parquet_dir: Path) -> list[dict]:
     """Les parties re-simulables : record complet, stats validees en direct, dans le perimetre.
 
@@ -618,7 +635,14 @@ def resim(
         # Python 3.14 demarre en forkserver, dont le socket est refuse par le sandbox.
         ctx = multiprocessing.get_context("fork")
         with ProcessPoolExecutor(max_workers=workers or workers_default(), mp_context=ctx) as pool:
-            for b, summaries in zip(batches, pool.map(run_batch, batches), strict=True):
+            # `as_completed`, pas `pool.map` : map rend les resultats dans l'ordre de
+            # SOUMISSION, donc avec les plus longues parties d'abord le premier lot a rendre
+            # est le plus lent -- mesure : aucun avancement visible, ni a l'ecran ni dans la
+            # table, pendant les 35 premieres minutes d'un run de 45.
+            lots = {pool.submit(run_batch, b): b for b in batches}
+            for fut in as_completed(lots):
+                b = lots[fut]
+                summaries = fut.result()
                 for s in summaries:
                     index.resim_record(conn, s)
                     statuses[s["status"]] += 1

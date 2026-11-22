@@ -13,6 +13,8 @@ Spec : docs/SPEC.md (lis seulement la section du jalon en cours). Avancement : d
   `cd data/engines/<sha> && ./node_modules/.bin/tsc --noEmit -p tsconfig.json`, et on ne lit que
   les lignes qui mentionnent `ofa_runner` (les 17 autres viennent du sparse-checkout).
 - `uv run ofa resim --report` : le tableau d'acceptation du J3, par cause
+- `uv run ofa resim --watch` : barre de progression, dans un AUTRE shell pendant que la
+  re-sim tourne (elle relit la table `resim`, en WAL ; rien n'est instrumenté dans la re-sim)
 - `duckdb -c "select count(*) from 'data/parquet/games/**/*.parquet'"` : requêtes ponctuelles
 
 ## Architecture (ne change pas sans ADR)

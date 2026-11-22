@@ -3,6 +3,7 @@
 import argparse
 import json
 import sys
+import time
 from pathlib import Path
 
 from . import config, engine, fixtures, index, ingest, normalize, purge, rating, resim
@@ -179,9 +180,57 @@ def cmd_engines(args) -> int:
     return 0
 
 
+def watch_resim(cfg, interval: float) -> int:
+    """Barre de progression, a lancer dans un autre shell pendant que la re-sim tourne.
+
+    Rien n'est instrumente dans la re-sim : la table `resim` est en WAL, donc lisible
+    pendant qu'elle est ecrite. Le suivi ne fait que la relire (ADR-0003 : c'est elle qui
+    porte la reprise, donc elle est de toute facon la verite sur l'avancement).
+    """
+    total = len(resim.candidates(cfg.data_dir / "parquet"))
+    conn = index.connect(cfg.index_db)
+    depart = None
+    t0 = time.monotonic()
+    fige = time.monotonic()
+    precedent = None
+    try:
+        while True:
+            rows = index.resim_counts(conn)
+            # On compte les VALIDES, pas les lignes : seules celles-la ne seront pas
+            # rejouees (`index.resim_done`). Sinon les echecs d'un run precedent feraient
+            # afficher 514/514 d'entree.
+            ok = next((r[1] for r in rows if r[0] == "ok"), 0)
+            echecs = sum(r[1] for r in rows if r[0] != "ok")
+            if depart is None:
+                depart, t0 = ok, time.monotonic()
+            if (ok, echecs) != precedent:
+                precedent, fige = (ok, echecs), time.monotonic()
+            watched = time.monotonic() - t0
+            rate = (ok - depart) / watched if watched > 0 and ok > depart else None
+            ligne = resim.progress_line(ok, total, echecs, watched, rate)
+            immobile = time.monotonic() - fige
+            if immobile > 180:
+                ligne += f"  (rien de nouveau depuis {immobile / 60:.0f} min)"
+            print("\r\033[K" + ligne, end="", flush=True)
+            if ok >= total:
+                print()
+                return 0
+            time.sleep(interval)
+    except KeyboardInterrupt:
+        print()
+        for status, n, _, _, _ in rows:
+            print(f"  {status:<24} {n}")
+        print("detail : uv run ofa resim --report")
+        return 0
+    finally:
+        conn.close()
+
+
 def cmd_resim(args) -> int:
     """Rejoue les parties selectionnees et ecrit les quatre tables de data/resim/."""
     cfg = config.load()
+    if args.watch:
+        return watch_resim(cfg, args.interval)
     if args.report:
         conn = index.connect(cfg.index_db)
         try:
@@ -312,6 +361,12 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--batch", type=int, default=8, help="parties par tache (defaut 8)")
     p.add_argument("--dry-run", action="store_true", help="affiche la selection, ne rejoue rien")
     p.add_argument("--report", action="store_true", help="relit le journal et sort l'acceptation")
+    p.add_argument(
+        "--watch",
+        action="store_true",
+        help="barre de progression, a lancer dans un autre shell pendant que la re-sim tourne",
+    )
+    p.add_argument("--interval", type=float, default=2.0, help="rafraichissement du suivi (s)")
     p.add_argument(
         "--evict",
         action="store_true",

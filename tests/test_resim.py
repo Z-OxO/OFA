@@ -265,6 +265,27 @@ def test_flux_vide_donne_des_tables_vides_au_bon_schema(tmp_path):
     assert all(tables[name].schema == schema for name, schema in resim.SCHEMAS.items())
 
 
+def test_la_barre_de_suivi_compte_les_valides():
+    """Seules les parties valides avancent la barre : les echecs seront rejoues."""
+    vide = resim.progress_line(0, 514, 514, 0.0, None)
+    assert vide.startswith("[" + "-" * 24 + "] 0/514")
+    assert "echecs 514" in vide and "reste -" in vide
+
+    moitie = resim.progress_line(257, 514, 1, 600.0, 257 / 600)
+    assert moitie.startswith("[" + "#" * 12 + "-" * 12 + "] 257/514")
+    assert " 50.0%" in moitie
+    assert "reste ~10 min" in moitie  # 257 parties restantes au meme debit
+
+    fin = resim.progress_line(514, 514, 1, 1200.0, 0.4)
+    assert fin.startswith("[" + "#" * 24 + "] 514/514")
+    assert "100.0%" in fin and "reste -" in fin
+
+
+def test_la_barre_ne_divise_pas_par_zero():
+    """Aucune partie selectionnee : le suivi doit afficher, pas planter."""
+    assert "0/0" in resim.progress_line(0, 0, 0, 0.0, None)
+
+
 # --------------------------------------------------------------------------------------
 # Preparation du moteur
 # --------------------------------------------------------------------------------------
