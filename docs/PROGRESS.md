@@ -990,15 +990,25 @@ Le portable rend **1 046 t/s à 14 workers** ; le serveur, 8 vCPU, en rend ~520.
 répartie sur les deux machines va **~3× plus vite** qu'une campagne sur le serveur seul, sans une
 ligne de code, sans risque, et `data/resim` est incrémental — ses Parquet s'ajoutent.
 
-À lancer, dans l'ordre d'utilité pour le J5 :
+**Mais le portable n'a rien à rejouer en l'état** : 520 records complets ici, 514 candidats,
+**514 déjà faits**. Les 48 100 records complets sont sur le serveur. La piste 0 demande donc un
+transfert d'abord, et c'est la seule chose qui la bloque :
 
-1. **sur le portable**, les parties de la fenêtre de confirmation du J5 d'abord :
-   `! uv run ofa resim --workers 14` (le journal local porte déjà 513 parties ; il reprend là où
-   il s'est arrêté) ;
-2. **sur le serveur**, la campagne continue comme prévu ;
-3. **les deux `data/resim` se réunissent par copie** : un fichier Parquet par mois et par table,
-   rien à fusionner, rien à dédoublonner tant que les deux machines ne rejouent pas la même
-   partie — donc partager la liste, par exemple les parties des mois pairs ici et impairs là-bas.
+1. **du serveur vers le portable** (hors sandbox, le SSH n'y passe pas) :
+   - `data/parquet/games` en entier — **5 Mo ici pour 514 parties**, donc l'ordre de 300 Mo pour
+     les 48 100 : c'est lui qui donne la population de candidats (`has_turns and stats_agreed and
+     in_scope`), sans quoi `resim` ne sélectionne rien ;
+   - la **part** de `data/raw/full` que le portable prendra : 29 Mo ici pour 520 records, soit
+     2,6 Go pour les 48 100, donc ~1,3 Go pour une moitié. Les 117 Go libres du disque Windows
+     l'absorbent sans discussion.
+2. **partager la liste**, pour que les deux machines ne rejouent pas la même partie : par exemple
+   les mois pairs ici, les mois impairs là-bas. Rien ne l'automatise aujourd'hui — `resim` prend
+   la population locale, donc la séparation se fait par ce qu'on transfère, ou par `--game`.
+3. **la réunion des deux `data/resim` est une copie** : un fichier Parquet par mois et par table,
+   rien à fusionner, rien à dédoublonner tant que les listes sont disjointes.
+
+En attendant ce transfert, le portable reste ce qu'il est : la machine où l'on mesure (le banc, le
+profil, les 100 parties de la preuve de déterminisme) et où l'on développe.
 
 ### Preuve de déterminisme
 
