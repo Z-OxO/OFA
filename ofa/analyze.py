@@ -20,9 +20,15 @@ import math
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-import duckdb
 import yaml
+
+# duckdb n'est importe QUE dans `connect()`. Ses wheels exigent l'AVX, que les `QEMU Virtual CPU`
+# du serveur n'ont pas : un `import duckdb` en tete tuait TOUTE commande `ofa` la-bas par SIGILL,
+# `ingest` et `resim` comprises, puisque cli.py importe ce module. Ici, seul `ofa analyze` echoue.
+if TYPE_CHECKING:
+    import duckdb
 
 from .config import CONFIRMATION_START, Config
 
@@ -288,6 +294,8 @@ def load_spec(root: Path, hid: str) -> Spec:
 
 
 def connect(cfg: Config) -> duckdb.DuckDBPyConnection:
+    import duckdb
+
     con = duckdb.connect()
     for name, rel in VIEWS.items():
         glob = f"{cfg.data_dir / rel}/**/*.parquet"
