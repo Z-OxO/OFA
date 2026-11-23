@@ -984,7 +984,43 @@ et il faudrait le réappliquer à chaque version du moteur de l'archive. Un patc
 s'applique de travers sur une version, c'est une divergence silencieuse. Pour 10 %, et alors que le
 ×3 est hors d'atteinte de toute façon, le rapport est mauvais. Rien n'a été patché.
 
-### Le ×3 est la piste 0 de la spec, et il attend une action de l'utilisateur
+### Décision : tout le travail reste sur le serveur, donc le ×3 n'est pas pris
+
+Mesuré sur le serveur le 2026-11-23 à 15h, campagne en cours : **47 027 parties restantes,
+477,8 M de ticks, 523 ticks/s** à 8 workers (85,9 par cœur) — soit **10,7 jours**. Le portable, lui,
+rend **1 097 t/s** à 14 workers.
+
+Un partage proportionnel aux débits (68 % portable / 32 % serveur) ramènerait le périmètre complet
+à **3,5 jours**, soit le ×3,1 du jalon. Un partage 50/50 ne donnerait que ×2,0 : le portable
+finirait en 2,6 jours et attendrait le serveur 2,7 jours de plus.
+
+**L'utilisateur a tranché : tout sur le serveur, le portable reste une machine de développement.**
+Le ×3 du J4c n'est donc pas pris, et c'est un choix, pas un échec de mesure. Ce qui reste du jalon
+est le **−7,1 % de code**, qui ramène les 10,7 jours à ~9,9.
+
+Conséquence opérationnelle, et elle est gratuite : `engine.install_runner` **relit
+`resim/ofa_runner.ts` à chaque partie**, donc le serveur prend les −7,1 % dès qu'il a le fichier,
+**sans redémarrer sa campagne** (le gain s'applique à la partie suivante). `ofa/resim.py` n'a pas
+besoin d'être à jour pour ça : son seul changement du J4c est la variable de profil, inactive en
+production. Il faut donc, dans l'ordre : le `git push --force-with-lease` qui attend déjà
+(action 1 ci-dessous), puis sur le serveur `git checkout -- ofa/resim.py && git pull`.
+
+### Un biais d'ordre à connaître avant que le J5 lise une population partielle
+
+`resim` trie sa sélection par `(git_commit, -num_turns, game_id)`, puis traite les groupes de
+commits du plus gros au plus petit. Tant que la campagne n'est pas finie, la population
+re-simulée est donc **doublement biaisée** : les commits les plus fréquents d'abord, et **les
+parties les plus longues d'abord**. Cet ordre est bon pour l'occupation des workers (les 10 % les
+plus lentes pèsent 28 % du temps, une géante qui démarre en dernier laisse 13 cœurs inoccupés),
+mais il veut dire qu'une lecture du J5 faite à 20 % de la campagne porte sur les 20 % de parties
+les plus longues. La durée d'une partie est corrélée au nombre de joueurs et à la map, donc au
+résultat : ce n'est pas un échantillon neutre.
+
+Non corrigé, et volontairement : le remède est un ordre par `hash(game_id)`, qui rend tout préfixe
+de campagne uniformément aléatoire, au prix d'une queue de fin de passe moins bien remplie. À
+trancher au J5, quand on saura s'il lit avant la fin.
+
+### Le ×3 de la piste 0, si un jour le portable y participe
 
 Le portable rend **1 046 t/s à 14 workers** ; le serveur, 8 vCPU, en rend ~520. Une campagne
 répartie sur les deux machines va **~3× plus vite** qu'une campagne sur le serveur seul, sans une
