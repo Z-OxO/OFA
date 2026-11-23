@@ -13,6 +13,7 @@ import json
 import multiprocessing
 import os
 import re
+import resource
 import subprocess
 import time
 from collections import Counter
@@ -424,6 +425,16 @@ def workers_default() -> int:
 
 RSS_RE = re.compile(r"RESIM wall=([\d.]+)s rss_max=(\d+)kB")
 
+# `/usr/bin/time` (paquet `time`) n'est PAS dans une Debian minimale, et son absence a coute
+# 13,5 h de re-simulation au premier lancement sur le serveur : le worker levait
+# FileNotFoundError, et la chaine s'arretait. Sans lui on mesure le pic memoire par getrusage,
+# moins precis mais jamais bloquant.
+TIME_PREFIX = (
+    ["/usr/bin/time", "-f", "RESIM wall=%es rss_max=%MkB"]
+    if Path("/usr/bin/time").exists()
+    else []
+)
+
 
 def run_one(task: dict) -> dict:
     """Rejoue UNE partie dans un sous-processus node. Tourne dans un worker, donc tout est
@@ -472,9 +483,7 @@ def run_one(task: dict) -> dict:
     try:
         proc = subprocess.run(
             [
-                "/usr/bin/time",
-                "-f",
-                "RESIM wall=%es rss_max=%MkB",
+                *TIME_PREFIX,
                 engine.NODE,
                 "--import",
                 "tsx",
@@ -500,6 +509,10 @@ def run_one(task: dict) -> dict:
     rss_kb = 0
     for m in RSS_RE.finditer(proc.stderr or ""):
         rss_kb = max(rss_kb, int(m.group(2)))
+    if not TIME_PREFIX:
+        # Repli : maximum CUMULE sur les enfants de ce worker. Le pic global reste juste, celui
+        # d'une partie isolee devient un majorant.
+        rss_kb = resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss
 
     if not out_path.exists():
         plain.unlink(missing_ok=True)
