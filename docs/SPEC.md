@@ -179,6 +179,59 @@ pour raccourcir un calcul que personne ne regarde. À ne reprendre que si une me
 bloquent quelque chose de réel. La règle du jalon, elle, reste pour tout le projet : **aucune
 modification conservée sans sa mesure avant/après sur le même échantillon fixe**.
 
+J4c — Accélérer la re-simulation (le jalon en cours)
+Motivation, chiffrée : les 48 100 records du périmètre sont collectés, mais les rejouer coûte
+**153 s de CPU par partie** (65 ticks/s/cœur), soit **4 500 parties/jour** sur les 8 cœurs du
+serveur et **10 jours** pour tout le périmètre. Les 10 000 parties dont le J5 a besoin tombent
+mercredi après-midi. C'est trop long, et ça le restera à chaque nouvelle campagne : le flux
+d'arrivée du périmètre est de ~6 900 parties/jour, donc le serveur ne tient déjà pas le rythme.
+Objectif : **×3 au moins**, mesuré, sans rien changer aux données produites.
+
+Non négociables (une seule violation invalide le jalon) :
+- **Déterminisme** : le même échantillon fixe re-simulé avant et après la modification produit des
+  tables IDENTIQUES — nombre de lignes et sommes de contrôle par colonne — et les stats finales
+  concordent toujours avec le record (ADR-0003).
+- **Mêmes données** : les quatre tables (`player_ticks`, `events`, `players`, `borders`) gardent
+  leurs colonnes et leur sémantique. Un échantillonnage plus grossier n'est pas « mêmes données » :
+  s'il est proposé, il l'est explicitement, avec ce que l'analyse y perd.
+- **Aucune modification conservée sans sa mesure avant/après sur le même échantillon fixe**
+  (la règle héritée du J4b). L'échantillon est celui de `docs/perf-sample.txt`.
+- Le moteur OpenFront **peut** être modifié — l'utilisateur l'autorise explicitement, ce qui lève
+  la règle de `.claude/rules/resim.md` — mais alors : un patch versionné, appliqué à la création du
+  worktree donc reproductible par commit, un ADR, et la preuve de déterminisme ci-dessus.
+
+Première étape, obligatoire avant toute optimisation : **un profil CPU** (`node --cpu-prof`) sur
+2 ou 3 vraies parties de coûts différents, publié dans docs/PERF.md, qui répartit les 153 s entre :
+la boucle du moteur, notre instrumentation par tick, la géographie, l'écriture Parquet, et le
+démarrage du process. Sans ce profil, toutes les pistes ci-dessous sont des paris.
+
+Pistes connues, à confirmer ou écarter par la mesure (ordre de gain attendu, pas d'exécution) :
+0. **Sans aucun code** : rejouer d'abord les parties utiles au J5 (`--game` sur la fenêtre de
+   confirmation), et répartir une campagne sur les deux machines (le portable a 20 cœurs, la
+   re-sim est incrémentale et ses Parquet s'ajoutent). Gain immédiat, zéro risque.
+1. **La géographie coûte ×2,58** (mesuré à l'ADR-0011) et produit 46 M de lignes pour 513 parties.
+   Le J5 ne lit `borders` qu'**au tick t0 de sa fenêtre**. Échantillonner les frontières tous les
+   100 ticks au lieu de 10, ou ne garder que les 5 agrégats de `player_ticks`, se discute donc avec
+   un vrai usage en face. C'est la piste la plus grosse, et c'est une question de spec avant d'être
+   une question de code.
+2. **Le démarrage du process** : `node --import tsx` transpile le runner ET le moteur à chaque
+   partie. Un bundle (esbuild) par commit, mis en cache comme le worktree, supprime ce coût fixe.
+   Écartée au J4b faute de besoin ; le besoin existe maintenant.
+3. **Notre instrumentation** : le runner diffe les objets vivants à **chaque** tick pour détecter
+   éliminations et attaques, alors que l'état n'est échantillonné que tous les 10. À profiler.
+4. **La boucle du moteur elle-même** : ce que le profil désignera. Les tours de jeu non pertinents
+   (trains, obus) sont déjà exclus de `events`, pas forcément de la simulation.
+5. **Node** : version, flags de GC, taille du semi-space. Gratuit à tester, à ne garder que mesuré.
+
+Acceptation :
+- docs/PERF.md § J4c porte le profil CPU, puis chaque piste avec sa mesure avant/après sur
+  l'échantillon fixe, et les pistes écartées avec la raison ;
+- **×3 au moins** sur le mur d'une passe complète de l'échantillon fixe, ou l'explication écrite de
+  pourquoi c'est impossible ;
+- le déterminisme est prouvé : ~100 parties déjà valides rejouées après modification rendent des
+  tables identiques (lignes et sommes de contrôle), et leurs stats concordent toujours ;
+- docs/PROGRESS.md à jour, un ADR par décision structurante, commit, stop.
+
 J5 — Moteur d'analyse
 Indicateurs par phase de partie (ouverture, milieu…), protocole « Rigueur », génération des fiches. Chaque fiche passe par la skill /tactic et l'agent stats-reviewer.
 Acceptation :

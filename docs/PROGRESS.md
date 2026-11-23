@@ -915,3 +915,53 @@ non-régression. Le résidu est à la 16e décimale, et c'est l'addition flottan
 - **Le renversement Team/FFA de l'alliance n'a pas d'explication mécanique** : hypothèse non
   testée, les équipiers étant déjà alliés par construction, demander une alliance en Team signifie
   la demander **hors de son équipe**.
+
+---
+
+## État des machines au 2026-11-23 13h (à lire en début de session)
+
+**Le serveur** : Debian 12, 8 vCPU, 11 Go de RAM utiles, 118 Go de disque (102 libres).
+`ssh zoxo@103.102.135.140 -p 2223`, projet dans `~/ofa`. `uv` est dans `~/.local/bin`, qui n'est
+**pas** dans le PATH d'un shell SSH non interactif : préfixer
+`export PATH="$HOME/.local/bin:$PATH"`. Le SSH ne passe pas depuis le sandbox de Claude Code
+(il ne route que le HTTP) : ces commandes tournent hors sandbox.
+
+| Sur le serveur | État au 2026-11-23 13h |
+| --- | --- |
+| `data/raw/meta` + `data/state` | transférés du portable (650 Mo), 55 952 parties |
+| `data/raw/full` | **48 100 records complets, collecte FINIE** (47 249 téléchargés, 7 852 hors périmètre, 0 échec, 2,59 Go, 8 h 20 de mur) |
+| `data/parquet` | reconstruit sur 12 000 records cette nuit ; `normalize` tourne depuis 13h04 sur les 48 100 |
+| `data/resim` | **515 parties** : les 513 du portable (transférées, 267 Mo) + 2 re-simulées sur place |
+| `data/openfront` | clone de référence, 2,1 Go |
+| `tmux campagne2` | `normalize` → `rating` → `resim --evict` sur ~45 000 parties, journal dans `~/campagne2.log` |
+| Ce qui n'existe pas | les timers systemd (J9) : rien ne redémarre tout seul après un plantage |
+
+**Le portable** : machine de développement, 14 cœurs / 20 vCPU, 15,7 Go. Porte les 513 re-sims
+d'origine, les tables du J2–J4 et les fixtures.
+
+### La leçon de la nuit, et ce qu'elle coûte
+
+La chaîne a réussi `normalize` (**16 min 37 s** pour 12 000 records complets — la projection d'une
+heure était pessimiste), `rating` (20 s) et `engines` (2 min 46 s, six versions du moteur), puis la
+re-sim est tombée à 23h27 sur `FileNotFoundError: /usr/bin/time` : le paquet `time` n'est pas dans
+une Debian minimale. **13,5 h de calcul perdues.** Le binaire est devenu optionnel (repli par
+`getrusage`, pic global juste, pic par partie devenu un majorant), vérifié sur place : 2 parties
+sur 2 en `ok`, 634 699 lignes, **2,5 min par partie** — les 153 s/partie projetées, confirmées.
+
+### Ce qui attend une action de l'utilisateur
+
+1. **`git push --force-with-lease origin main`** : l'historique a été réécrit (identité `Z_OxO`,
+   liens de session retirés) et 12 commits attendent, dont le correctif `/usr/bin/time`.
+2. **Sur le serveur, après le push** : `cd ofa && git checkout -- ofa/resim.py && git pull` —
+   `resim.py` y a été posé par `scp` pour ne pas perdre une journée de plus, donc le dépôt y est
+   divergent d'un fichier.
+3. **Le rattrapage historique** (`OFA_RATE=4 uv run ofa ingest --backfill`) : décision en attente.
+   L'API est libre depuis 05h23, c'est du réseau pur, ça cohabite avec la re-sim, et c'est lui qui
+   rendra le rating juste pour toutes les fiches. 7,7 jours de requêtes, 26 Go, 2,65 M parties.
+
+### Où en est le J5, précisément
+
+Deux critères sur trois. Les **12 pré-inscriptions sont commitées et explorées** (toutes dans le
+sens attendu, `findings/runs/*-exploration.json`), et **aucune confirmation n'a été lue** sauf
+celle du rodage. Elles attendent ~10 000 parties re-simulées pour que le niveau A soit possible —
+mercredi après-midi au rythme actuel, et c'est précisément ce que le **J4c** doit raccourcir.
