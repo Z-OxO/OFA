@@ -430,9 +430,7 @@ RSS_RE = re.compile(r"RESIM wall=([\d.]+)s rss_max=(\d+)kB")
 # FileNotFoundError, et la chaine s'arretait. Sans lui on mesure le pic memoire par getrusage,
 # moins precis mais jamais bloquant.
 TIME_PREFIX = (
-    ["/usr/bin/time", "-f", "RESIM wall=%es rss_max=%MkB"]
-    if Path("/usr/bin/time").exists()
-    else []
+    ["/usr/bin/time", "-f", "RESIM wall=%es rss_max=%MkB"] if Path("/usr/bin/time").exists() else []
 )
 
 
@@ -499,7 +497,17 @@ def run_one(task: dict) -> dict:
             text=True,
             capture_output=True,
             timeout=timeout,
-            env={**engine.ENV, "OFA_MAPS_DIR": str(maps_dir)},
+            env={
+                **engine.ENV,
+                "OFA_MAPS_DIR": str(maps_dir),
+                # J4c : le profil CPU du runner. Un prefixe par partie, sinon deux workers
+                # ecrasent le meme fichier. Absent en production.
+                **(
+                    {"OFA_PROFILE": f"{os.environ['OFA_PROFILE']}/{game_id}"}
+                    if "OFA_PROFILE" in os.environ
+                    else {}
+                ),
+            },
         )
     except subprocess.TimeoutExpired:
         plain.unlink(missing_ok=True)

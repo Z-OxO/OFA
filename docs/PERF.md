@@ -330,6 +330,146 @@ Trois limites à connaître :
   conclusion — l'écart est le même à tous les points — mais la projection ci-dessus garde les
   65 t/s du run réel, pas les 134 du banc.
 
+## J4c — Où passent vraiment les 153 s
+
+### Le profil, obligatoire avant toute optimisation
+
+Instrument : **celui du moteur**, `tests/perf/fullgame/Profiler.ts` (échantillonneur V8, temps
+propre par fonction, temps par classe d'`Execution`), chargé par le runner derrière `OFA_PROFILE`
+en import dynamique — ce répertoire n'existe pas forcément au commit rejoué. Rien à écrire de
+notre côté : `OFA_PROFILE=<dir> OFA_DATA_DIR=<jetable> uv run ofa resim --workers 1 --game <ids>`
+pose un `.cpuprofile` (ouvrable dans Chrome DevTools) et un `.profile.json` par partie.
+
+Trois parties de coûts différents, un seul worker, sur le portable :
+
+| | `d9z1XvegdJ` | `dohNq93jAw` | `cptwrA59zh` |
+|---|---|---|---|
+| ticks | 5 371 | 9 691 | 16 511 |
+| mur de la boucle | 42,3 s | 49,1 s | 49,5 s |
+| simulation (Σ des ticks, chronométrés par le moteur) | 29,1 s — **69 %** | 39,4 s — **80 %** | 37,9 s — **77 %** |
+| dont exécutions du moteur | 24,1 s — 57 % | 32,4 s — 66 % | 28,5 s — 58 % |
+| hors simulation (vue + notre relevé) | 13,2 s — 31 % | 9,7 s — 20 % | 11,6 s — 23 % |
+
+**Première surprise, et elle change la prémisse du jalon : une partie coûte 42 à 50 s, pas 153 s.**
+Le journal du J3 note ces trois-là à 120-123 s, et l'échantillon fixe a justement été choisi « à
+~123 s chacune » — mais ces 123 s sont une mesure **sous 6 workers**, et les 153 s/partie de la
+spec une mesure sous 8 workers sur le serveur. Le J4b avait relevé le symptôme sans le poursuivre
+(« non expliqué : 67 s ici à 12 workers contre 123 s au J3 »). Le coût CPU d'une partie et son
+coût sous concurrence sont deux nombres différents ; c'est le second qui décide d'une campagne,
+et il ne se réduit pas en touchant au code.
+
+Temps propre par fonction, ordres de grandeur sur les trois parties :
+
+| fonction | part du mur | ce que c'est |
+|---|---|---|
+| `(anonymous)` — `ofa_runner.ts` | 7-11 % | **notre** instrumentation (tsx efface les lignes : tout y est fondu) |
+| `toFullUpdate` + `toUpdate` + lambdas de `PlayerImpl` | 8-13 % | l'objet de vue construit pour **chaque joueur à chaque tick**, puis diffé |
+| `floodComponent`, `checkAndAssignTerritory`, `floodFillWithGen` | ~10 % | la décomposition du territoire : vraie logique de jeu |
+| `AttackExecution.tick` + `addNeighbors` | 5-7 % | vraie logique de jeu |
+| `TileSet.values` | 3,3-5,5 % | l'itération des ensembles de tuiles — un **générateur** |
+| `GameRunner.executeNextTick` | 1,3-3,5 % | travail de vue : compactage des unités, copies |
+| `e.tick` + `now` (Profiler) | ~3 % | l'instrument lui-même |
+| `(garbage collector)` | 0,8-0,9 % | — |
+
+Ce que le profil **réfute** :
+- **`placeName` n'apparaît pas**, pas même dans les 40 premières fonctions. « La boîte de nom
+  coûte cher » est faux : `largestClusterBoundingBox` est déjà calculée par `PlayerExecution`, et
+  le facteur d'échelle garde la grille minuscule.
+- **`nearby()` + `shoreReachableNeighbors` = 2 à 3 %**, et non les ~60 % que le ×2,58 de
+  l'ADR-0011 laissait supposer : ce ×2,58 était un coût de **volume** (46 M de lignes écrites),
+  pas de CPU.
+- **le GC ne fait pas 1 %** : rien à gagner sur les flags de Node (piste 5 de la spec, écartée).
+
+### Où va NOTRE instrumentation : trois compteurs
+
+Le profil V8 fond tout notre code sous `(anonymous)`. Trois compteurs dans le runner, actifs
+seulement sous `OFA_PROFILE`, le séparent :
+
+| | `d9z1XvegdJ` | `dohNq93jAw` | `cptwrA59zh` |
+|---|---|---|---|
+| **géographie** (tuiles de frontière, `nearby`, lignes `borders`) | 14,6 s — **24 %** | 8,4 s — **15 %** | 9,3 s — **18 %** |
+| diff par tick (éliminations, attaques) | 0,6 s — 0,9 % | 0,5 s — 1,0 % | 0,7 s — 1,4 % |
+| relevé d'état (les ~40 colonnes, `unitCount` ×9) | 0,6 s — 1,1 % | 0,3 s — 0,6 % | 0,3 s — 0,6 % |
+
+Les murs de cette passe sont gonflés de 7 à 45 % par les `performance.now()` des compteurs
+eux-mêmes, placés dans la boucle par joueur : ce sont les **parts** qui comptent ici, pas les murs.
+
+La piste 3 de la spec — « le runner diffe les objets vivants à **chaque** tick alors que l'état
+n'est échantillonné que tous les 10 » — est donc **écartée par la mesure : 1 % du mur**. Tout
+notre coût est dans la géographie, et dans la passe sur les tuiles de frontière, pas dans
+`nearby()`.
+
+### Ce qui a été gardé, et ce que ça rend
+
+Protocole : l'échantillon fixe des 16 parties (`docs/perf-sample.txt`), `uv run python
+scratch/bench_workers.py 14`, le banc du J4b inchangé (OFA_DATA_DIR jetable, journal remis à zéro,
+cache de pages chaud). 155 656 ticks par passe, 16/16 `ok` à chaque fois.
+
+| passe | CPU | gain | mur du banc | débit/cœur | RSS max |
+|---|---|---|---|---|---|
+| HEAD (avant) | 1 306,3 s | — | 148,8 s | 119,2 t/s | 628 Mo |
+| + notre propre pilote de tick | 1 254,2 s | **−4,0 %** | 149,6 s | 124,1 t/s | 623 Mo |
+| + `forEach` sur les tuiles de frontière | 1 214,0 s | **−7,1 %** (cumulé) | 141,9 s | 128,2 t/s | 614 Mo |
+
+**C'est le CPU qui mesure un changement de code sur ce banc, pas son mur** : 16 parties sur
+14 workers font une vague pleine puis une vague de 2, donc le mur est fixé par la queue de fin de
+passe (`busy` = 0,60) et ne bouge qu'au-delà du bruit de ±5 %.
+
+Les deux modifications, toutes deux dans `resim/ofa_runner.ts`, à données identiques :
+
+1. **Notre propre pilote de tick** (−4,0 %). `GameRunner.executeNextTick` travaille pour un écran
+   que nous n'avons pas : `placeName` sur tous les joueurs tous les 30 ticks, `placeSpawnName`
+   pendant la phase de spawn, le compactage des unités que nous déballions juste derrière, et une
+   copie des données de vue. On ne garde `GameRunner` que pour son `init()` — la liste des
+   exécutions de départ change d'un commit à l'autre, la recopier imposerait des imports statiques
+   de modules absents des commits anciens — et la boucle appelle `createExecs`, `executeNextTick`
+   et les `drain*` elle-même. Les unités se lisent **en clair**, ce qui supprime au passage
+   l'adaptateur de compactage : −50 lignes. Voir ADR-0013.
+2. **`forEach` au lieu de `for...of` sur `borderTiles()`** (−3,2 % de plus). L'itérateur d'un
+   `TileSet` est un **générateur** (`*values()`) : un objet et un `.next()` par tuile, et il y a
+   **42 millions de visites de tuiles de frontière par partie**. `ReadonlyTileSet.forEach`
+   parcourt le tableau dense directement, et la méthode est sur l'interface à tous les commits de
+   l'archive (vérifié sur les 7 versions locales, la plus ancienne comprise).
+
+### Le déterminisme, vérifié
+
+100 parties déjà valides (trois versions du moteur), 1 026 270 ticks, 13 861 925 lignes, 17,5 min
+à 14 workers : **100/100 `ok`** (stats concordantes, ADR-0003), **100 722 / 100 722 hashes du
+moteur appariés**, et les quatre tables identiques — lignes et somme de contrôle par colonne,
+comparées dans l'ordre des 81 colonnes. Détail dans PROGRESS.md § J4c.
+
+### Pourquoi le ×3 n'existe pas à données constantes
+
+Le profil le dit en trois lignes : **60 à 66 % du mur est la simulation du jeu elle-même**
+(`PlayerExecution`, `AttackExecution`, les navires, le pathfinding), et ça, c'est la partie — on
+ne peut pas l'enlever sans changer le résultat. Le reste se répartit entre notre géographie
+(15-24 %), la vue construite dans la boucle du moteur (8-13 %) et la vue de `GameRunner`
+(1,3-3,5 %). Même en supprimant **tout** le travail de vue et **toute** notre instrumentation, le
+plafond serait ~×1,4. Nous en avons pris **7,1 %**.
+
+Et la géographie qui reste n'est pas du gaspillage : 42 M de visites de tuiles par partie à
+~300 ns chacune, c'est de la **latence mémoire**. Les quatre voisins d'une tuile sont à ±1 (même
+ligne de cache, gratuit) et à ±largeur de carte (deux lignes de cache différentes, hors L2 sur une
+grille de 2 Mo) : deux défauts de cache par tuile de frontière, et DRAM à ~80 ns. C'est la même
+cause qui fait tomber le débit par cœur de 200 t/s (1 worker) à 120 t/s (14 workers) : la
+re-simulation est limitée par la mémoire, pas par le CPU.
+
+**Le ×3 est donc ailleurs, et il est déjà écrit dans la spec : la piste 0.** Le portable rend
+1 046 t/s à 14 workers ; le serveur, 8 vCPU, en rend ~520. Une campagne répartie sur les deux
+machines va **~3× plus vite** qu'une campagne sur le serveur seul, sans une ligne de code et sans
+risque — et `data/resim` est incrémental, ses Parquet s'ajoutent.
+
+### Pistes écartées, avec leur chiffre
+
+| piste (spec J4c) | verdict | mesure |
+|---|---|---|
+| 1. la géographie coûte ×2,58 | **partiellement vraie, et déjà prise** | 15-24 % du mur, dont 3,2 % récupérés par `forEach` ; le reste est de la latence mémoire |
+| 2. le démarrage (bundle esbuild) | **écartée** | `placeName` et le compactage, qui étaient le gros du travail de `GameRunner`, sont partis sans bundle ; le démarrage reste à ~1,4 s, soit 3 % d'une partie à 46 s |
+| 3. l'instrumentation par tick | **réfutée** | 1,0 % du mur (compteur dédié) |
+| 4. la boucle du moteur | **intouchable** | 60-66 % du mur, c'est la partie elle-même |
+| 5. Node (GC, semi-space) | **écartée** | `(garbage collector)` = 0,8-0,9 % du mur |
+| — un patch du moteur pour supprimer `toUpdate` par joueur et par tick | **écartée malgré 8-13 %** | le gain est réel, mais le patch viserait des lignes de `GameImpl.executeNextTick` qui diffèrent d'un commit à l'autre : un patch textuel sur 7+ versions du moteur, dans la boucle de simulation, pour 10 % — alors que le ×3 est hors d'atteinte de toute façon. `.claude/rules/resim.md` reste intacte. |
+
 ## À remesurer plus tard
 
 - [x] ~~Les 5,00 o/ligne viennent de séries synthétiques réalistes~~ → **8,24 o** pour
@@ -339,4 +479,8 @@ Trois limites à connaître :
 - [ ] Le même run sur le serveur (8 workers, 16 Go) : vérifier les 486 parties/h projetées.
 - [ ] La courbe de workers au-delà de 16, et sur un mélange qui contient les géantes : les deux
       points que le banc du J4b ne couvre pas.
+- [x] ~~Les 153 s par partie~~ → **42 à 50 s** au worker unique (J4c) : les 123 s du J3 et les
+      153 s du serveur sont des mesures sous concurrence, pas un coût CPU.
+- [ ] Les ~520 t/s projetés du serveur à 8 workers : jamais mesurés, et c'est sur eux que repose
+      le ×3 de la répartition sur deux machines.
 - [ ] `ofa rating` sur un mois complet du serveur : vérifier les ~5 Go de pic projetés.

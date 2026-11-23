@@ -918,6 +918,108 @@ non-régression. Le résidu est à la 16e décimale, et c'est l'addition flottan
 
 ---
 
+## J4c — Accélérer la re-simulation (livré : −7,1 % de CPU, et le ×3 déplacé là où il est)
+
+Le jalon demandait **×3 à données constantes**. La règle « aucune optimisation avant le profil »
+a payé tout de suite : le profil a réfuté trois des cinq pistes de la spec, dont celle que j'avais
+moi-même proposée comme la plus prometteuse.
+
+**La prémisse du jalon était fausse.** Les 153 s par partie ne sont pas le coût CPU d'une partie :
+ce sont **42 à 50 s**, mesurées au worker unique sur trois vraies parties. Les 123 s du journal du
+J3 et les 153 s du serveur sont des mesures **sous concurrence** (6 et 8 workers). Le J4b avait vu
+le symptôme et l'avait laissé en « non expliqué » ; c'était la bonne piste et elle n'a pas été
+suivie. Le coût CPU d'une partie et son coût sous concurrence sont deux nombres différents, et
+c'est le second qui décide d'une campagne.
+
+**Où va le temps** (détail et tableaux dans [PERF.md](PERF.md) § J4c) :
+
+| | part du mur |
+|---|---|
+| la simulation du jeu elle-même (`PlayerExecution`, `AttackExecution`, navires, pathfinding) | **60-66 %** |
+| notre géographie (42 M de visites de tuiles de frontière par partie) | 15-24 % |
+| la vue construite dans la boucle du moteur (`toUpdate` par joueur et par tick) | 8-13 % |
+| la vue de `GameRunner` (`placeName`, compactage, copies) | 1,3-3,5 % |
+| le GC | 0,9 % |
+
+Même en supprimant **tout** le travail de vue et **toute** notre instrumentation, le plafond est
+~×1,4. Le ×3 n'est pas dans le code de la re-sim : 60 à 66 % du mur, c'est la partie qui se joue.
+
+### Ce qui a été gardé : deux modifications, 7,1 % de CPU, données identiques
+
+Mesuré sur l'échantillon fixe des 16 parties, 155 656 ticks par passe, 16/16 `ok` :
+**1 306,3 s → 1 254,2 s → 1 214,0 s** de CPU (`uv run python scratch/bench_workers.py 14`).
+
+1. **Notre propre pilote de tick** (−4,0 %, [ADR-0013](adr/0013-pilote-de-tick.md)).
+   `GameRunner.executeNextTick` travaillait pour un écran que nous n'avons pas. On ne garde
+   `GameRunner` que pour son `init()` — la liste des exécutions de départ change d'un commit à
+   l'autre — et la boucle appelle `createExecs`, `executeNextTick` et les `drain*` elle-même. Les
+   unités se lisent **en clair**, donc l'adaptateur de compactage disparaît : le runner perd
+   50 lignes et gagne un chemin unique pour tous les commits.
+2. **`forEach` au lieu de `for...of` sur `borderTiles()`** (−3,2 % de plus). L'itérateur d'un
+   `TileSet` est un **générateur** : un objet et un `.next()` par tuile, 42 M de fois par partie.
+
+Ce qui reste de la géographie n'est pas du gaspillage : ~300 ns par tuile de frontière, c'est de
+la **latence mémoire** (les voisins à ±largeur de carte tombent hors du cache L2). C'est la même
+cause qui fait tomber le débit par cœur de 200 t/s à un worker à 120 t/s à quatorze.
+
+### Ce que le profil a réfuté
+
+- **`placeName` n'apparaît pas dans le profil**, pas même dans les 40 premières fonctions. C'était
+  mon hypothèse principale : la grille de recherche du plus grand rectangle inscrit, sur tous les
+  joueurs tous les 30 ticks. Elle est fausse — `largestClusterBoundingBox` est déjà calculée par
+  `PlayerExecution`, et le facteur d'échelle garde la grille minuscule.
+- **Le ×2,58 de la géographie (ADR-0011) était un coût de volume, pas de CPU** : `nearby()` et sa
+  passe redondante sur les tuiles de frontière ne font que **2-3 %** du mur. J'avais construit tout
+  un raisonnement sur « la passe est faite trois fois » ; c'est vrai, et ça ne coûte rien.
+- **« Le runner diffe les objets vivants à chaque tick » (piste 3) : 1,0 % du mur**, compteur
+  dédié. La piste était inscrite dans la spec depuis le J3.
+- **Le GC : 0,9 %.** Rien à gagner sur les flags de Node (piste 5).
+
+### Le patch du moteur, autorisé et refusé
+
+Le J4c levait explicitement `.claude/rules/resim.md`. Le seul patch qui valait son chiffre était la
+suppression de `toUpdate` par joueur et par tick (**8-13 %**) — refusé : il viserait des lignes de
+`GameImpl.executeNextTick` qui diffèrent d'un commit à l'autre, **dans la boucle de simulation**,
+et il faudrait le réappliquer à chaque version du moteur de l'archive. Un patch textuel qui
+s'applique de travers sur une version, c'est une divergence silencieuse. Pour 10 %, et alors que le
+×3 est hors d'atteinte de toute façon, le rapport est mauvais. Rien n'a été patché.
+
+### Le ×3 est la piste 0 de la spec, et il attend une action de l'utilisateur
+
+Le portable rend **1 046 t/s à 14 workers** ; le serveur, 8 vCPU, en rend ~520. Une campagne
+répartie sur les deux machines va **~3× plus vite** qu'une campagne sur le serveur seul, sans une
+ligne de code, sans risque, et `data/resim` est incrémental — ses Parquet s'ajoutent.
+
+À lancer, dans l'ordre d'utilité pour le J5 :
+
+1. **sur le portable**, les parties de la fenêtre de confirmation du J5 d'abord :
+   `! uv run ofa resim --workers 14` (le journal local porte déjà 513 parties ; il reprend là où
+   il s'est arrêté) ;
+2. **sur le serveur**, la campagne continue comme prévu ;
+3. **les deux `data/resim` se réunissent par copie** : un fichier Parquet par mois et par table,
+   rien à fusionner, rien à dédoublonner tant que les deux machines ne rejouent pas la même
+   partie — donc partager la liste, par exemple les parties des mois pairs ici et impairs là-bas.
+
+### Preuve de déterminisme
+
+100 parties déjà valides (les 100 premières `ok` du journal, trois versions du moteur :
+8b5d071e ×57, dd85bcfb ×31, 1d28b8f2 ×12), rejouées avec le nouveau runner dans un `OFA_DATA_DIR`
+jetable, 1 026 270 ticks, 13 861 925 lignes, 17,5 min de mur à 14 workers :
+
+- **100/100 en `ok`** : les stats finales concordent avec le record (ADR-0003) ;
+- **100 722 / 100 722 hashes du moteur appariés** : à chaque dixième de tick comparé, l'état
+  interne de la simulation est celui du record ;
+- **les quatre tables sont identiques** — nombre de lignes et somme de contrôle par colonne,
+  comparées **dans l'ordre des colonnes** (une comparaison sur sommes triées aurait laissé passer
+  un échange entre deux colonnes) :
+
+| table | colonnes | lignes | identique |
+|---|---|---|---|
+| `player_ticks` | 40 | 1 961 265 | oui |
+| `events` | 16 | 3 393 124 | oui |
+| `players` | 19 | 34 548 | oui |
+| `borders` | 6 | 8 472 988 | oui |
+
 ## État des machines au 2026-11-23 13h (à lire en début de session)
 
 **Le serveur** : Debian 12, 8 vCPU, 11 Go de RAM utiles, 118 Go de disque (102 libres).

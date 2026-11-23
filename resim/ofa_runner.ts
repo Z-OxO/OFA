@@ -79,15 +79,6 @@ const TRACKED_UNITS: [string, UnitType][] = [
 ];
 
 /**
- * Adaptateur par **version d'interface**, jamais par commit : `PackedUnitUpdates` n'existe pas
- * dans les commits anciens de l'archive, et avant lui les updates d'unites arrivaient en clair
- * dans `updates[Unit]`. Un `import` statique ferait planter le runner au chargement (vecu :
- * ERR_MODULE_NOT_FOUND au commit 79aed26b). On detecte, on ne suppose pas.
- *
- * Note TypeScript : `await import(...)` est un import *dynamique*, evalue a l'execution, donc
- * il peut echouer sans empecher le fichier de se charger — contrairement a un `import` en tete.
- */
-/**
  * Les champs qu'on lit sur les updates d'evenement. Tous optionnels : d'un commit a l'autre un
  * champ peut ne pas exister, et c'est la liste exacte de ce dont le runner depend.
  */
@@ -116,13 +107,18 @@ interface EventFields {
   troops?: number;
 }
 
-type UnpackUnits = (packed?: Float64Array, timers?: Uint32Array) => UnitUpdate[];
-
-async function loadUnpackUnits(): Promise<UnpackUnits | null> {
+/**
+ * J4c — le profil CPU. Le moteur livre son propre instrument dans tests/perf/fullgame/ :
+ * l'echantillonneur V8 (`CpuProfiler`), le temps propre par fonction (`summarizeCpuProfile`) et
+ * le temps par classe d'Execution (`ExecutionProfiler`). On ne le charge que si OFA_PROFILE est
+ * pose, et par import dynamique : ce repertoire n'existe pas forcement au commit rejoue, et un
+ * `import` en tete ferait planter le runner au chargement (meme piege que loadUnpackUnits).
+ */
+async function loadProfiler() {
   try {
-    const mod = await import("@openfront/engine-lib/game/PackedUnitUpdates");
-    return mod.unpackUnitUpdates as UnpackUnits;
+    return await import("../perf/fullgame/Profiler");
   } catch {
+    console.error("OFA_PROFILE pose, mais tests/perf/fullgame/Profiler absent a ce commit");
     return null;
   }
 }
@@ -306,6 +302,17 @@ async function main(): Promise<void> {
   );
 
   const sink = new Sink(opts.state);
+
+  // Le profil s'attache ICI : apres createGame, et avant runner.init(), sinon les executions
+  // de depart (nations, bots, timer de spawn, verification de victoire) echappent au compteur.
+  const profilePrefix = process.env.OFA_PROFILE ?? null;
+  const profiler = profilePrefix === null ? null : await loadProfiler();
+  const execProfiler = profiler === null ? null : new profiler.ExecutionProfiler();
+  execProfiler?.attach(game);
+  const tickStats = profiler === null ? null : new profiler.TickStats();
+  const cpuProfiler = profiler === null ? null : new profiler.CpuProfiler();
+  if (cpuProfiler !== null) await cpuProfiler.start();
+
   const computedHashes = new Map<number, number>();
   let win: WinUpdate | null = null;
   let fatalError: string | undefined;
@@ -370,82 +377,90 @@ async function main(): Promise<void> {
     }
   };
 
-  // `null` = ce commit est anterieur au compactage des unites (voir loadUnpackUnits).
-  const unpackUnits = await loadUnpackUnits();
-
-  const runner = new GameRunner(
+  const executor = new Executor(
     game,
-    new Executor(game, gameStart.gameID, undefined, gameStart.tribes?.map((t) => t.name)),
-    (gu) => {
-      if ("errMsg" in gu) {
-        fatalError = `${gu.errMsg}\n${gu.stack ?? ""}`;
-        return;
-      }
-      // Un GameUpdateType absent du commit rejoue vaut `undefined`, et `updates[undefined]`
-      // aussi : toute lecture passe donc par `each`, qui ne suppose l'existence de rien.
-      const updatesByType = gu.updates as unknown as Record<number, unknown[] | undefined>;
-      const each = <T>(type: GameUpdateType | undefined, fn: (e: T) => void): void => {
-        const slot = type === undefined ? undefined : updatesByType[type as number];
-        if (slot === undefined) return;
-        for (const e of slot as T[]) fn(e);
-      };
-
-      each<HashUpdate>(GameUpdateType.Hash, (hu) => computedHashes.set(hu.tick, hu.hash));
-      // Premier Win seulement : c'est celui qui a clos la partie.
-      each<WinUpdate>(GameUpdateType.Win, (w) => {
-        win ??= w;
-      });
-
-      if (opts.state === null) return;
-      // Interface recente : les unites arrivent compactees. Ancienne : en clair.
-      onUnits(
-        gu.packedUnitUpdates !== undefined && unpackUnits !== null
-          ? unpackUnits(gu.packedUnitUpdates, gu.packedMissileTimers)
-          : ((updatesByType[GameUpdateType.Unit as number] ?? []) as UnitUpdate[]),
-      );
-      each<EventFields>(GameUpdateType.ConquestEvent, (e) => {
-        event("conquest", small(e.conquerorId), small(e.conqueredId), { gold: e.gold });
-      });
-      // Attention : les updates d'alliance, de cible et d'embargo portent deja des smallID
-      // (`requestorID: number`, AllianceRequestImpl.toUpdate), alors que conquete, don et
-      // bonus portent des PlayerID (des chaines). D'ou `small()` sur les seconds seulement.
-      each<EventFields>(GameUpdateType.AllianceRequest, (e) => {
-        event("alliance_request", e.requestorID ?? null, e.recipientID ?? null);
-      });
-      each<EventFields>(GameUpdateType.AllianceRequestReply, (e) => {
-        event("alliance_reply", e.request?.requestorID ?? null, e.request?.recipientID ?? null, {
-          ok: e.accepted,
-        });
-      });
-      each<EventFields>(GameUpdateType.BrokeAlliance, (e) => {
-        event("alliance_broken", e.traitorID ?? null, e.betrayedID ?? null);
-      });
-      each<EventFields>(GameUpdateType.AllianceExpired, (e) => {
-        event("alliance_expired", e.player1ID ?? null, e.player2ID ?? null);
-      });
-      each<EventFields>(GameUpdateType.AllianceExtension, (e) => {
-        event("alliance_extension", e.playerID ?? null, null, { ui: e.allianceID });
-      });
-      each<EventFields>(GameUpdateType.DonateEvent, (e) => {
-        event("donate", small(e.senderId), small(e.recipientId), {
-          what: e.donationType,
-          amount: e.amount,
-        });
-      });
-      each<EventFields>(GameUpdateType.EmbargoEvent, (e) => {
-        event("embargo", e.playerID ?? null, e.embargoedID ?? null, { what: e.event });
-      });
-      each<EventFields>(GameUpdateType.TargetPlayer, (e) => {
-        event("target", e.playerID ?? null, e.targetID ?? null);
-      });
-      each<EventFields>(GameUpdateType.BonusEvent, (e) => {
-        event("bonus", small(e.player), null, { gold: e.gold, troops: e.troops });
-      });
-      each<unknown>(GameUpdateType.SpawnPhaseEnd, () => {
-        event("spawn_phase_end", null, null);
-      });
-    },
+    gameStart.gameID,
+    undefined,
+    gameStart.tribes?.map((t) => t.name),
   );
+
+  /**
+   * J4c — on ne garde `GameRunner` que pour son `init()`, et on pilote les ticks nous-memes.
+   *
+   * `init()` ajoute les executions de depart (timer de spawn, nations, bots, verification de
+   * victoire, horloge de l'apocalypse, grappes de rails) et cette liste change d'un commit a
+   * l'autre : la recopier ici imposerait des `import` statiques de modules absents des commits
+   * anciens, c'est-a-dire le piege ERR_MODULE_NOT_FOUND.
+   *
+   * Son `executeNextTick`, lui, travaille pour un ecran que nous n'avons pas : `placeName` sur
+   * tous les joueurs tous les 30 ticks, `placeSpawnName` pendant la phase de spawn, le
+   * compactage des unites que nous deballions juste derriere, et une copie des donnees de vue.
+   * La boucle ci-dessous fait le reste avec l'API publique, et lit les unites EN CLAIR — ce qui
+   * supprime du meme coup l'adaptateur de compactage. Mesure : docs/PERF.md § J4c.
+   */
+  const runner = new GameRunner(game, executor, () => {});
+
+  // Un GameUpdateType absent du commit rejoue vaut `undefined`, et `updates[undefined]`
+  // aussi : toute lecture passe donc par `each`, qui ne suppose l'existence de rien.
+  const readUpdates = (updatesByType: Record<number, unknown[] | undefined>) => {
+    const each = <T>(type: GameUpdateType | undefined, fn: (e: T) => void): void => {
+      const slot = type === undefined ? undefined : updatesByType[type as number];
+      if (slot === undefined) return;
+      for (const e of slot as T[]) fn(e);
+    };
+
+    each<HashUpdate>(GameUpdateType.Hash, (hu) => computedHashes.set(hu.tick, hu.hash));
+    // Premier Win seulement : c'est celui qui a clos la partie.
+    each<WinUpdate>(GameUpdateType.Win, (w) => {
+      win ??= w;
+    });
+
+    if (opts.state === null) return;
+    // En clair, a tous les commits : c'est `GameRunner` qui compactait ce tableau puis le
+    // vidait, et nous ne passons plus par lui (J4c).
+    onUnits((updatesByType[GameUpdateType.Unit as number] ?? []) as UnitUpdate[]);
+    each<EventFields>(GameUpdateType.ConquestEvent, (e) => {
+      event("conquest", small(e.conquerorId), small(e.conqueredId), { gold: e.gold });
+    });
+    // Attention : les updates d'alliance, de cible et d'embargo portent deja des smallID
+    // (`requestorID: number`, AllianceRequestImpl.toUpdate), alors que conquete, don et
+    // bonus portent des PlayerID (des chaines). D'ou `small()` sur les seconds seulement.
+    each<EventFields>(GameUpdateType.AllianceRequest, (e) => {
+      event("alliance_request", e.requestorID ?? null, e.recipientID ?? null);
+    });
+    each<EventFields>(GameUpdateType.AllianceRequestReply, (e) => {
+      event("alliance_reply", e.request?.requestorID ?? null, e.request?.recipientID ?? null, {
+        ok: e.accepted,
+      });
+    });
+    each<EventFields>(GameUpdateType.BrokeAlliance, (e) => {
+      event("alliance_broken", e.traitorID ?? null, e.betrayedID ?? null);
+    });
+    each<EventFields>(GameUpdateType.AllianceExpired, (e) => {
+      event("alliance_expired", e.player1ID ?? null, e.player2ID ?? null);
+    });
+    each<EventFields>(GameUpdateType.AllianceExtension, (e) => {
+      event("alliance_extension", e.playerID ?? null, null, { ui: e.allianceID });
+    });
+    each<EventFields>(GameUpdateType.DonateEvent, (e) => {
+      event("donate", small(e.senderId), small(e.recipientId), {
+        what: e.donationType,
+        amount: e.amount,
+      });
+    });
+    each<EventFields>(GameUpdateType.EmbargoEvent, (e) => {
+      event("embargo", e.playerID ?? null, e.embargoedID ?? null, { what: e.event });
+    });
+    each<EventFields>(GameUpdateType.TargetPlayer, (e) => {
+      event("target", e.playerID ?? null, e.targetID ?? null);
+    });
+    each<EventFields>(GameUpdateType.BonusEvent, (e) => {
+      event("bonus", small(e.player), null, { gold: e.gold, troops: e.troops });
+    });
+    each<unknown>(GameUpdateType.SpawnPhaseEnd, () => {
+      event("spawn_phase_end", null, null);
+    });
+  };
   runner.init();
   rebuildIndex();
 
@@ -469,8 +484,61 @@ async function main(): Promise<void> {
   // smallID d'un voisin -> nombre de mes tuiles de frontiere qui lui font face. Reutilise
   // d'un joueur a l'autre (`clear()`), parce qu'il est rempli des milliers de fois.
   const facing = new Map<number, number>();
+
+  /**
+   * Le visiteur d'UNE tuile de frontiere, cree une seule fois pour toute la partie.
+   *
+   * Pourquoi `forEach` et pas `for...of` : `borderTiles()` rend un TileSet dont l'iterateur est
+   * un **generateur** (`*values()`), donc un objet et un `.next()` par tuile — 3 a 5 % du mur
+   * passaient la (profil du J4c). `forEach` parcourt le tableau dense directement. La methode
+   * est sur l'interface `ReadonlyTileSet` a tous les commits de l'archive, verifie.
+   *
+   * Pourquoi son etat est ici et pas dans la boucle : une fermeture qui capturerait des `let`
+   * de la boucle serait reallouee a chaque joueur et a chaque echantillon.
+   */
+  let visMine = 0;
+  let visSea = 0;
+  let visFront = 0;
+  const visitBorderTile = (tile: number) => {
+    let touchesWater = false;
+    let touchesPlayer = false;
+    // Dedoublonnage sans allocation : au plus 3 proprietaires etrangers sur 4 voisins.
+    let seen0 = -1;
+    let seen1 = -1;
+    let seen2 = -1;
+    const count = map.neighbors4(tile, NEIGHBOR_SCRATCH);
+    for (let i = 0; i < count; i++) {
+      const n = NEIGHBOR_SCRATCH[i];
+      if (map.isWater(n)) {
+        touchesWater = true;
+        continue;
+      }
+      // Une montagne ne se conquiert jamais (`conquer` leve dessus), et de la terre libre
+      // irradiee non plus tant que la retombee dure : ni l'une ni l'autre n'est une
+      // frontiere. Memes deux tests que `computeNearby` dans le moteur.
+      if (map.isImpassable(n)) continue;
+      const owner = map.ownerID(n);
+      if (owner === 0 && map.hasFallout(n)) continue;
+      if (owner === visMine || owner === seen0 || owner === seen1 || owner === seen2) continue;
+      if (seen0 < 0) seen0 = owner;
+      else if (seen1 < 0) seen1 = owner;
+      else seen2 = owner;
+      facing.set(owner, (facing.get(owner) ?? 0) + 1);
+      // smallID 0 = TerraNullius, de la terre libre : de la place, pas un voisin.
+      if (owner !== 0) touchesPlayer = true;
+    }
+    if (touchesWater) visSea++;
+    if (touchesPlayer) visFront++;
+  };
+  // J4c : ou va le temps DE NOTRE instrumentation. Le profil V8 ne sait pas le dire : tsx
+  // efface les numeros de ligne et toutes nos lambdas sortent sous « (anonymous) », fondues
+  // en une seule entree. Actifs seulement sous OFA_PROFILE.
+  const timing = profiler !== null;
+  const partMs = { diff: 0, sample: 0, geo: 0 };
+
   const sampleAndDiff = () => {
     const tick = game.ticks();
+    const tDiff0 = timing ? performance.now() : 0;
     const seenAttacks = new Set<string>();
     for (const p of game.allPlayers()) {
       const sid = p.smallID();
@@ -516,11 +584,13 @@ async function main(): Promise<void> {
         ok: atk.retreating,
       });
     }
+    if (timing) partMs.diff += performance.now() - tDiff0;
     if (tick % SAMPLE_EVERY !== 0) return;
     for (const p of game.players()) {
       // Les trajectoires ne portent que les humains : un bot ou une nation n'est pas un
       // sujet d'analyse, et les inclure doublerait le volume (voir docs/DATA.md).
       if (p.type() !== PlayerType.Human || !p.hasSpawned()) continue;
+      const tRow0 = timing ? performance.now() : 0;
       const row: Record<string, unknown> = {
         k: "s",
         t: tick,
@@ -574,41 +644,15 @@ async function main(): Promise<void> {
       // La longueur est volontairement asymetrique : « mes tuiles face a lui » n'est pas
       // « ses tuiles face a moi », parce qu'une de mes tuiles peut toucher deux des siennes.
       // C'est bien mon exposition a lui qu'on veut mesurer.
+      const tGeo0 = timing ? performance.now() : 0;
       const mine = p.smallID();
       facing.clear();
-      let borderSea = 0;
-      let borderFront = 0;
-      for (const tile of p.borderTiles()) {
-        let touchesWater = false;
-        let touchesPlayer = false;
-        // Dedoublonnage sans allocation : au plus 3 proprietaires etrangers sur 4 voisins.
-        let seen0 = -1;
-        let seen1 = -1;
-        let seen2 = -1;
-        const count = map.neighbors4(tile, NEIGHBOR_SCRATCH);
-        for (let i = 0; i < count; i++) {
-          const n = NEIGHBOR_SCRATCH[i];
-          if (map.isWater(n)) {
-            touchesWater = true;
-            continue;
-          }
-          // Une montagne ne se conquiert jamais (`conquer` leve dessus), et de la terre
-          // libre irradiee non plus tant que la retombee dure : ni l'une ni l'autre n'est
-          // une frontiere. Memes deux tests que `computeNearby` dans le moteur.
-          if (map.isImpassable(n)) continue;
-          const owner = map.ownerID(n);
-          if (owner === 0 && map.hasFallout(n)) continue;
-          if (owner === mine || owner === seen0 || owner === seen1 || owner === seen2) continue;
-          if (seen0 < 0) seen0 = owner;
-          else if (seen1 < 0) seen1 = owner;
-          else seen2 = owner;
-          facing.set(owner, (facing.get(owner) ?? 0) + 1);
-          // smallID 0 = TerraNullius, de la terre libre : de la place, pas un voisin.
-          if (owner !== 0) touchesPlayer = true;
-        }
-        if (touchesWater) borderSea++;
-        if (touchesPlayer) borderFront++;
-      }
+      visMine = mine;
+      visSea = 0;
+      visFront = 0;
+      p.borderTiles().forEach(visitBorderTile);
+      const borderSea = visSea;
+      const borderFront = visFront;
       // Les voisins que le moteur voit et que l'adjacence terrestre ne donne pas : ceux
       // d'en face d'une riviere. Ils sortent avec une longueur de front de 0, et c'est
       // exactement ce que ce 0 veut dire dans la table (docs/DATA.md).
@@ -625,6 +669,7 @@ async function main(): Promise<void> {
         }
         sink.write({ k: "b", t: tick, a: mine, b: owner, n: tiles });
       }
+      const tGeo1 = timing ? performance.now() : 0;
       // La boite englobante du plus gros bloc de territoire : la seule mesure de FORME que
       // le moteur expose (il calcule les blocs a chaque tick pour la decomposition, mais
       // n'en publie que celle-la). Donne l'etendue, l'allongement et le centre approche.
@@ -651,6 +696,10 @@ async function main(): Promise<void> {
       row.border_sea = borderSea;
       row.border_longest = longest;
       sink.write(row);
+      if (timing) {
+        partMs.geo += tGeo1 - tGeo0;
+        partMs.sample += tGeo0 - tRow0 + (performance.now() - tGeo1);
+      }
     }
   };
 
@@ -660,11 +709,27 @@ async function main(): Promise<void> {
   let compared = 0;
   let ticksRun = 0;
   for (const turn of record.turns) {
-    runner.addTurn(turn);
-    if (!runner.executeNextTick()) {
+    // Ce que faisait GameRunner.executeNextTick, moins le travail de vue : les intentions du
+    // tour deviennent des executions, le moteur avance d'un tick, on lit ses updates.
+    game.addExecution(...executor.createExecs(turn));
+    const tTick0 = timing ? performance.now() : 0;
+    let updates;
+    try {
+      updates = game.executeNextTick();
+    } catch (err) {
+      fatalError = err instanceof Error ? `${err.message}\n${err.stack ?? ""}` : String(err);
       console.error(`tick en echec au turn ${turn.turnNumber}: ${fatalError}`);
       break;
     }
+    if (timing) tickStats?.record(game.ticks(), performance.now() - tTick0);
+    readUpdates(updates as unknown as Record<number, unknown[] | undefined>);
+    // Ces quatre tampons ne se vident QUE par leur drain (`tileUpdatePairs` et la carte
+    // d'updates, eux, sont remis a zero par executeNextTick) : sans ces appels ils gonflent
+    // jusqu'a la fin de la partie. On jette ce qu'ils rendent, c'est de la donnee de vue.
+    game.drainPackedPlayerUpdates();
+    game.drainPackedAttackUpdates();
+    game.drainPackedMotionPlans();
+    game.drainNukeImpacts();
     ticksRun++;
     if (opts.state !== null) sampleAndDiff();
     const c = computedHashes.get(turn.turnNumber);
@@ -737,6 +802,36 @@ async function main(): Promise<void> {
     allPlayersStats: w !== null ? w.allPlayersStats : stats,
     stoppedOnWin: w !== null,
   };
+
+  if (cpuProfiler !== null && profiler !== null && profilePrefix !== null) {
+    const profile = await cpuProfiler.stop();
+    fs.writeFileSync(`${profilePrefix}.cpuprofile`, JSON.stringify(profile));
+    fs.writeFileSync(
+      `${profilePrefix}.profile.json`,
+      JSON.stringify(
+        {
+          gameID: info.gameID,
+          ticksRun,
+          wallSeconds,
+          state: opts.state !== null,
+          // Budget = 100 ms, la duree REELLE d'un tick : au-dela, la re-sim serait plus
+          // lente que la partie elle-meme.
+          ticks: tickStats?.summarize(100),
+          // Notre instrumentation, en secondes : le diff par tick, le releve d'etat, la
+          // geographie. `mur - ticks.totalMs - ces trois-la` = le travail de vue de GameRunner.
+          ours: {
+            diffS: partMs.diff / 1000,
+            sampleS: partMs.sample / 1000,
+            geoS: partMs.geo / 1000,
+          },
+          executions: execProfiler?.report(),
+          functions: profiler.summarizeCpuProfile(profile, PROJECT_ROOT).slice(0, 40),
+        },
+        null,
+        1,
+      ),
+    );
+  }
 
   const json = JSON.stringify(result, bigintToString, 1);
   if (opts.out !== null) fs.writeFileSync(opts.out, json);
